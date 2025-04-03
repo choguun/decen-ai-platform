@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
+from datetime import datetime
 
 class UploadResponse(BaseModel):
     filename: str
@@ -17,12 +18,29 @@ class TrainRequest(BaseModel):
     # e.g., hyperparameters: Dict[str, Any] = None
 
 class TrainResponse(BaseModel):
-    message: str = "Training job initiated successfully"
+    job_id: str = Field(..., description="Unique ID for the background training job.")
+    message: str = "Training job initiated successfully. Check status later."
     dataset_cid: str
-    model_cid: str = Field(..., description="CID of the trained model file (.joblib)")
-    model_info_cid: str = Field(..., description="CID of the model metadata file (.json)")
-    accuracy: Optional[float] = Field(None, description="Accuracy achieved on the test set during training.")
-    fvm_tx_hash: Optional[str] = Field(None, description="Transaction hash for provenance registration on FVM.")
+    # These fields are now part of the status response, not immediate response
+    # model_cid: str = Field(..., description="CID of the trained model file (.joblib)")
+    # model_info_cid: str = Field(..., description="CID of the model metadata file (.json)")
+    # accuracy: Optional[float] = Field(None, description="Accuracy achieved on the test set during training.")
+    # fvm_tx_hash: Optional[str] = Field(None, description="Transaction hash for provenance registration on FVM.")
+
+# Add model for status reporting
+class TrainingStatusResponse(BaseModel):
+    job_id: str
+    status: str = Field(..., description="Current status (e.g., PENDING, DOWNLOADING, TRAINING, UPLOADING, REGISTERING, COMPLETED, FAILED)")
+    message: Optional[str] = Field(None, description="Optional message, e.g., error details.")
+    dataset_cid: str
+    owner_address: str
+    # Results available when status is COMPLETED
+    model_cid: Optional[str] = None
+    model_info_cid: Optional[str] = None
+    accuracy: Optional[float] = None
+    fvm_tx_hash: Optional[str] = None
+    created_at: Optional[datetime] = None # Use datetime if importing
+    updated_at: Optional[datetime] = None # Use datetime if importing
 
 class InferenceRequest(BaseModel):
     model_cid: str = Field(..., description="CID of the trained model (.joblib) to use for inference.")
