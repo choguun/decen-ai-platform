@@ -6,6 +6,7 @@ from hexbytes import HexBytes
 import json
 import logging
 import time
+from typing import Dict, List, Any # Import typing helpers
 
 from .. import config
 
@@ -49,7 +50,6 @@ else:
 
 # --- Contract ABI (Placeholder) ---
 # TODO: Replace with your actual contract ABI - load from a JSON file ideally
-# Example ABI structure for the registerAsset function
 DEFAULT_CONTRACT_ABI = json.dumps([
     {
         "inputs": [
@@ -63,22 +63,50 @@ DEFAULT_CONTRACT_ABI = json.dumps([
         "stateMutability": "nonpayable",
         "type": "function"
     },
-    # TODO: Add ABIs for getAssetByCid and getAssetsByOwner functions
-    # Example:
-    # {
-    #     "inputs": [{"internalType": "string", "name": "_cid", "type": "string"}],
-    #     "name": "getAssetByCid",
-    #     "outputs": [{"components": [...], "internalType": "struct AssetRecord", "name": "", "type": "tuple"}],
-    #     "stateMutability": "view",
-    #     "type": "function"
-    # },
-    # {
-    #     "inputs": [{"internalType": "address", "name": "_owner", "type": "address"}],
-    #     "name": "getAssetsByOwner",
-    #     "outputs": [{"components": [...], "internalType": "struct AssetRecord[]", "name": "", "type": "tuple[]"}],
-    #     "stateMutability": "view",
-    #     "type": "function"
-    # }
+    # Added placeholder ABI for getAssetByCid
+    {
+        "inputs": [{"internalType": "string", "name": "_cid", "type": "string"}],
+        "name": "getAssetByCid",
+        # Adjust output struct based on your contract's AssetRecord
+        "outputs": [
+            {
+                "components": [
+                    {"internalType": "address", "name": "owner", "type": "address"},
+                    {"internalType": "string", "name": "datasetCid", "type": "string"},
+                    {"internalType": "string", "name": "modelCid", "type": "string"},
+                    {"internalType": "string", "name": "metadataCid", "type": "string"},
+                    {"internalType": "uint256", "name": "timestamp", "type": "uint256"}
+                 ],
+                 "internalType": "struct YourContractName.AssetRecord", # Replace YourContractName
+                 "name": "record",
+                 "type": "tuple"
+             }
+         ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    # Added placeholder ABI for getAssetsByOwner
+    {
+        "inputs": [{"internalType": "address", "name": "_owner", "type": "address"}],
+        "name": "getAssetsByOwner",
+        # Adjust output struct based on your contract's AssetRecord
+        "outputs": [
+            {
+                "components": [
+                    {"internalType": "address", "name": "owner", "type": "address"},
+                    {"internalType": "string", "name": "datasetCid", "type": "string"},
+                    {"internalType": "string", "name": "modelCid", "type": "string"},
+                    {"internalType": "string", "name": "metadataCid", "type": "string"},
+                    {"internalType": "uint256", "name": "timestamp", "type": "uint256"}
+                 ],
+                 "internalType": "struct YourContractName.AssetRecord[]", # Replace YourContractName
+                 "name": "records",
+                 "type": "tuple[]"
+             }
+         ],
+        "stateMutability": "view",
+        "type": "function"
+    }
 ])
 
 # --- Load Contract Instance ---
@@ -167,22 +195,72 @@ def register_asset_provenance(owner_address: str, dataset_cid: str, model_cid: s
         return None
 
 
-def get_provenance_by_cid(cid: str):
-    """Placeholder function to query provenance by CID from the FVM contract."""
+def get_provenance_by_cid(cid: str) -> Dict[str, Any] | None:
+    """Queries provenance by a specific CID (dataset, model, or metadata) from the FVM contract."""
     logger.info(f"Querying provenance for CID: {cid}")
     if not w3 or not contract:
         logger.error("Cannot query provenance: Web3 client or contract not initialized.")
         return None
-    # TODO: Implement contract.functions.getAssetByCid(cid).call() logic
-    # Requires the ABI for getAssetByCid to be added above
-    return {"cid": cid, "owner": "0x... (Not Implemented)", "related_assets": []} # Placeholder data
 
-def get_provenance_by_owner(owner_address: str):
-    """Placeholder function to query provenance by owner address."""
+    try:
+        # Call the contract's view function
+        # Ensure the function name 'getAssetByCid' matches your contract
+        result_tuple = contract.functions.getAssetByCid(cid).call()
+        logger.debug(f"Raw provenance result for CID {cid}: {result_tuple}")
+
+        # Assuming the function returns a tuple matching the ABI's output struct
+        # Convert the tuple result to a dictionary
+        if result_tuple and result_tuple[0] != '0x0000000000000000000000000000000000000000': # Check if owner address is non-zero
+            asset_record = {
+                "owner": result_tuple[0],
+                "datasetCid": result_tuple[1],
+                "modelCid": result_tuple[2],
+                "metadataCid": result_tuple[3],
+                "timestamp": result_tuple[4] # Keep as integer timestamp
+            }
+            logger.info(f"Provenance found for CID {cid}")
+            return asset_record
+        else:
+            logger.info(f"No provenance record found for CID {cid}")
+            return None # Not found
+
+    except Exception as e:
+        logger.error(f"Error querying provenance by CID {cid}: {e}", exc_info=True)
+        # Handle potential contract reverts or ABI mismatches
+        return None
+
+def get_provenance_by_owner(owner_address: str) -> List[Dict[str, Any]] | None:
+    """Queries all provenance records for a specific owner address."""
     logger.info(f"Querying provenance for owner: {owner_address}")
     if not w3 or not contract:
         logger.error("Cannot query provenance: Web3 client or contract not initialized.")
         return None
-    # TODO: Implement contract.functions.getAssetsByOwner(owner_address).call() logic
-    # Requires the ABI for getAssetsByOwner to be added above
-    return [] # Placeholder data
+
+    try:
+        # Ensure address is checksummed
+        checksum_owner = Web3.to_checksum_address(owner_address)
+
+        # Call the contract's view function
+        # Ensure the function name 'getAssetsByOwner' matches your contract
+        results_list_of_tuples = contract.functions.getAssetsByOwner(checksum_owner).call()
+        logger.debug(f"Raw provenance results for owner {owner_address}: {results_list_of_tuples}")
+
+        # Convert the list of tuples to a list of dictionaries
+        asset_records = []
+        if results_list_of_tuples:
+            for record_tuple in results_list_of_tuples:
+                 if record_tuple and record_tuple[0] != '0x0000000000000000000000000000000000000000':
+                    asset_records.append({
+                        "owner": record_tuple[0],
+                        "datasetCid": record_tuple[1],
+                        "modelCid": record_tuple[2],
+                        "metadataCid": record_tuple[3],
+                        "timestamp": record_tuple[4]
+                    })
+
+        logger.info(f"Found {len(asset_records)} provenance records for owner {owner_address}")
+        return asset_records
+
+    except Exception as e:
+        logger.error(f"Error querying provenance by owner {owner_address}: {e}", exc_info=True)
+        return None
