@@ -5,7 +5,7 @@ import logging # Add logging config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Import routers
-from .routers import data, training, inference # Add training and inference
+from .routers import data, training, inference, auth # Add auth
 
 app = FastAPI(
     title="Decentralized AI Platform Backend",
@@ -14,6 +14,7 @@ app = FastAPI(
 )
 
 # Include routers
+app.include_router(auth.router) # Include auth router
 app.include_router(data.router)
 app.include_router(training.router) # Include training router
 app.include_router(inference.router) # Include inference router
@@ -33,7 +34,7 @@ def read_root():
 
 # TODO: Model inference endpoint
 
-# TODO: Provenance query endpoints
+# TODO: Provenance query endpoints (FVM interaction)
 
 
 # --- Server Startup (for local development) ---

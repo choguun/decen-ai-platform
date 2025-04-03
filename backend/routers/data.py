@@ -6,6 +6,7 @@ import logging
 
 from ..services import lighthouse_service
 from ..models.data_models import UploadResponse, ErrorResponse
+from ..routers.auth import get_current_user_address_insecure
 
 router = APIRouter(
     prefix="/data",
@@ -17,16 +18,22 @@ logger = logging.getLogger(__name__)
 @router.post(
     "/upload/dataset",
     response_model=UploadResponse,
-    responses={status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse}}
+    responses={
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse},
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}
+    }
 )
-def upload_dataset(file: UploadFile = File(...)):
+def upload_dataset(
+    file: UploadFile = File(...),
+    current_user_address: str = Depends(get_current_user_address_insecure)
+):
     """
     Uploads a dataset file (e.g., CSV) to Lighthouse storage.
+    Requires authentication.
 
     - **file**: The dataset file to upload.
     """
-    # TODO: Add authentication check here later
-    logger.info(f"Received dataset upload request for file: {file.filename}")
+    logger.info(f"Authenticated user {current_user_address} uploading dataset: {file.filename}")
 
     # Use a temporary directory for secure handling
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -70,4 +77,7 @@ def upload_dataset(file: UploadFile = File(...)):
                 pass
 
 # TODO: Add endpoint for uploading models (similar structure)
-# TODO: Add endpoints for querying/listing datasets/models (will likely involve FVM interaction) 
+# TODO: Add endpoints for querying/listing datasets/models (will likely involve FVM interaction)
+
+# TODO: Apply the same `Depends` pattern to other protected endpoints
+# (model upload, training start, inference, provenance queries needing user context) 

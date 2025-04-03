@@ -3,6 +3,8 @@ uvicorn[standard]>=0.20.0
 python-dotenv>=1.0.0
 lighthouseweb3>=0.2.4
 web3>=6.0.0
+# SIWE dependency
+siwe>=1.0.0
 # ML dependencies
 pandas>=1.5.0
 scikit-learn>=1.2.0
