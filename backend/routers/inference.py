@@ -9,6 +9,7 @@ from typing import Any, Dict, Tuple
 
 from ..services import lighthouse_service, ml_service
 from ..models.data_models import InferenceRequest, InferenceResponse, ErrorResponse
+from ..routers.auth import get_current_active_user
 
 router = APIRouter(
     prefix="/inference",
@@ -85,15 +86,17 @@ def load_model_and_info(model_cid: str, model_info_cid: str | None) -> tuple[Any
     responses={
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
         status.HTTP_400_BAD_REQUEST: {"model": ErrorResponse},
-        status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse}
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse},
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse}
     }
 )
 def predict(
     inference_request: InferenceRequest,
-    # TODO: Add auth dependency
+    current_user_address: str = Depends(get_current_active_user)
 ):
     """
     Performs inference using a specified model CID and input data.
+    Requires authentication.
 
     Downloads the model (and optionally metadata) from Lighthouse,
     loads it, and makes a prediction based on the provided input features.
@@ -102,7 +105,7 @@ def predict(
     - **input_data**: Dictionary of feature names and values.
     - **model_info_cid** (optional): CID of the metadata file if needed.
     """
-    logger.info(f"Received inference request for model CID: {inference_request.model_cid}")
+    logger.info(f"User {current_user_address} requesting inference for model CID: {inference_request.model_cid}")
 
     # Load model and info (handles caching and downloading)
     model, model_info = load_model_and_info(inference_request.model_cid, inference_request.model_info_cid)
