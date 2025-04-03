@@ -7,6 +7,7 @@ import shutil # For cleaning up temp dirs/files
 
 from ..services import lighthouse_service, ml_service, fvm_service
 from ..models.data_models import TrainRequest, TrainResponse, ErrorResponse
+from ..routers.auth import get_current_active_user # Import the auth dependency
 
 router = APIRouter(
     prefix="/training",
@@ -17,10 +18,10 @@ logger = logging.getLogger(__name__)
 
 def run_training_job(
     dataset_cid: str,
-    # Add other params later if needed (hyperparameters, etc.)
+    owner_address: str # Add owner address parameter
 ):
-    """Background task to run the full training pipeline."""
-    logger.info(f"Background training job started for dataset CID: {dataset_cid}")
+    """Background task to run the full training pipeline, including owner address."""
+    logger.info(f"Background training job started for dataset CID: {dataset_cid} by owner: {owner_address}")
     temp_dir = None
     downloaded_dataset_path = None
     model_path = None
@@ -49,9 +50,12 @@ def run_training_job(
         logger.info(f"Model training successful. Accuracy: {model_info.get('accuracy')}")
         # Add dataset CID to model_info for provenance
         model_info['source_dataset_cid'] = dataset_cid
-        # Re-save info file with dataset CID
+        # Add owner address to metadata
+        model_info['owner_address'] = owner_address
+        # Re-save info file with dataset CID and owner address
         with open(info_path, 'w') as f:
             json.dump(model_info, f, indent=2)
+        logger.info(f"Model info updated with owner {owner_address} and dataset CID {dataset_cid}")
 
         # 3. Upload model and metadata
         logger.info(f"Uploading trained model from {model_path}")
@@ -71,13 +75,13 @@ def run_training_job(
             return
         logger.info(f"Model info uploaded successfully. CID: {model_info_cid}")
 
-        # 4. Register Provenance on FVM (Placeholder)
-        logger.info("Registering provenance on FVM...")
+        # 4. Register Provenance on FVM (Now uses owner_address)
+        logger.info(f"Registering provenance on FVM for owner {owner_address}...")
         fvm_tx_hash = fvm_service.register_asset_provenance(
+            owner_address=owner_address, # Pass the owner address
             dataset_cid=dataset_cid,
             model_cid=model_cid,
             metadata_cid=model_info_cid
-            # Add owner address later from authenticated user
         )
         if fvm_tx_hash:
             logger.info(f"Provenance registered successfully. Tx Hash: {fvm_tx_hash}")
@@ -107,17 +111,21 @@ def run_training_job(
     response_model=TrainResponse, # Response indicates initiation, not completion
     status_code=status.HTTP_202_ACCEPTED,
     responses={
+        # Add 401 response for auth failure
+        status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse}
     }
 )
 def start_training(
     train_request: TrainRequest,
-    background_tasks: BackgroundTasks
-    # TODO: Add dependency for authenticated user later: user: User = Depends(get_current_user)
+    background_tasks: BackgroundTasks,
+    # Add the dependency to get authenticated user address
+    current_user_address: str = Depends(get_current_active_user)
 ):
     """
-    Initiates a model training job in the background.
+    Initiates a model training job in the background for the authenticated user.
+    Requires JWT authentication.
 
     Takes a dataset CID, downloads the data, trains a model,
     uploads the model and metadata to Lighthouse, and registers provenance on FVM.
@@ -125,14 +133,18 @@ def start_training(
 
     - **dataset_cid**: CID of the dataset to train on.
     """
-    logger.info(f"Received request to start training for dataset CID: {train_request.dataset_cid}")
+    logger.info(f"User {current_user_address} requested training for dataset CID: {train_request.dataset_cid}")
     # TODO: Validate dataset_cid format?
     # TODO: Check if dataset CID exists / is accessible? (maybe deferred to background task)
 
-    # Add the training job to background tasks
-    background_tasks.add_task(run_training_job, train_request.dataset_cid)
+    # Add the training job to background tasks, passing the user address
+    background_tasks.add_task(
+        run_training_job,
+        dataset_cid=train_request.dataset_cid,
+        owner_address=current_user_address # Pass the authenticated user address
+    )
 
-    logger.info(f"Training job for dataset {train_request.dataset_cid} added to background tasks.")
+    logger.info(f"Training job for dataset {train_request.dataset_cid} added to background tasks for user {current_user_address}.")
 
     # Return an initial response - actual results come from background task
     # Note: CIDs and Tx hash won't be available here yet.

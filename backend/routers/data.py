@@ -6,7 +6,7 @@ import logging
 
 from ..services import lighthouse_service
 from ..models.data_models import UploadResponse, ErrorResponse
-from ..routers.auth import get_current_user_address_insecure
+from ..routers.auth import get_current_active_user
 
 router = APIRouter(
     prefix="/data",
@@ -25,11 +25,11 @@ logger = logging.getLogger(__name__)
 )
 def upload_dataset(
     file: UploadFile = File(...),
-    current_user_address: str = Depends(get_current_user_address_insecure)
+    current_user_address: str = Depends(get_current_active_user)
 ):
     """
     Uploads a dataset file (e.g., CSV) to Lighthouse storage.
-    Requires authentication.
+    Requires authentication via JWT bearer token.
 
     - **file**: The dataset file to upload.
     """
