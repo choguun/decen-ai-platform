@@ -5,7 +5,7 @@ import logging # Add logging config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Import routers
-from .routers import data, training, inference, auth # Add auth
+from .routers import data, training, inference, auth, provenance # Add provenance
 
 app = FastAPI(
     title="Decentralized AI Platform Backend",
@@ -18,6 +18,7 @@ app.include_router(auth.router) # Include auth router
 app.include_router(data.router)
 app.include_router(training.router) # Include training router
 app.include_router(inference.router) # Include inference router
+app.include_router(provenance.router) # Include provenance router
 
 @app.get("/", tags=["Health Check"])
 def read_root():
