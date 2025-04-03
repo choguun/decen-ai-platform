@@ -1,15 +1,26 @@
 from fastapi import APIRouter, HTTPException, status, Request, Depends
+from fastapi.security import OAuth2PasswordBearer # For JWT extraction
 from siwe import SiweMessage, generate_nonce
-from datetime import datetime
+from datetime import datetime, timedelta, timezone # Added timezone
+from jose import JWTError, jwt # For JWT handling
+from pydantic import BaseModel, ValidationError # For token payload validation
 import logging
 
 from ..models.auth_models import NonceResponse, VerifyRequest, VerifyResponse
-from ..models.data_models import ErrorResponse # For error responses
+from ..models.data_models import ErrorResponse
+from .. import config # Import config for JWT settings
 
-# In-memory store for nonces (replace with Redis/DB in production for scalability and persistence)
-# Stores nonce -> generated_time
+# --- JWT Configuration ---
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token") # Dummy URL, we use /verify
+
+# --- Token Payload Model ---
+class TokenData(BaseModel):
+    sub: str # Subject (typically the user identifier, e.g., address)
+    # Add other claims like roles if needed
+
+# In-memory store for nonces (replace with Redis/DB in production)
 _nonce_store: dict[str, datetime] = {}
-NONCE_EXPIRATION_SECONDS = 300 # Nonces expire after 5 minutes
+NONCE_EXPIRATION_SECONDS = 300
 
 router = APIRouter(
     prefix="/auth",
@@ -18,9 +29,10 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
+# --- Helper Functions ---
 def cleanup_expired_nonces():
     """Removes expired nonces from the store."""
-    now = datetime.now()
+    now = datetime.now(timezone.utc) # Use timezone-aware datetime
     expired_keys = [
         key for key, timestamp in _nonce_store.items()
         if (now - timestamp).total_seconds() > NONCE_EXPIRATION_SECONDS
@@ -30,16 +42,29 @@ def cleanup_expired_nonces():
             del _nonce_store[key]
             logger.debug(f"Expired nonce removed: {key}")
         except KeyError:
-            pass # Already removed by another process/thread
+            pass
 
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
+    """Creates a JWT access token."""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        # Default expiry from config
+        expire = datetime.now(timezone.utc) + timedelta(minutes=config.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, config.JWT_SECRET_KEY, algorithm=config.JWT_ALGORITHM)
+    return encoded_jwt
+
+# --- API Endpoints ---
 @router.get("/nonce", response_model=NonceResponse)
 def get_nonce():
     """
     Generates a unique nonce for the client to use in the SIWE message.
     """
-    cleanup_expired_nonces() # Clean up before generating
+    cleanup_expired_nonces()
     nonce = generate_nonce()
-    _nonce_store[nonce] = datetime.now()
+    _nonce_store[nonce] = datetime.now(timezone.utc) # Use timezone-aware datetime
     logger.info(f"Generated nonce: {nonce}")
     return NonceResponse(nonce=nonce)
 
@@ -50,106 +75,120 @@ def get_nonce():
 )
 def verify_signature(verify_request: VerifyRequest, request: Request):
     """
-    Verifies a SIWE message signature.
+    Verifies a SIWE message signature and returns a JWT access token upon success.
 
-    Checks the message structure, signature validity, domain, and nonce.
-    If successful, it implicitly authenticates the user for the scope of this request.
-    (Future enhancement: generate a session token/JWT).
+    Checks message structure, signature, domain, and nonce.
+    If successful, generates a JWT containing the user's address.
 
     - **message**: The structured SIWE message signed by the user.
     - **signature**: The hex-encoded signature string.
     """
     try:
         siwe_message = SiweMessage(message=verify_request.message)
-
-        # --- Security Checks ---
-        # 1. Verify signature and message structure
-        # This also checks basic message fields like address format
         siwe_message.verify(verify_request.signature)
         logger.info(f"SIWE signature verified successfully for address: {siwe_message.address}")
 
-        # 2. Check domain binding (should match the frontend domain)
-        # TODO: Get expected domain from config/env
-        expected_domain = request.url.hostname # Use request hostname for now
+        # TODO: Get expected domain from config/env more reliably
+        expected_domain = request.url.hostname
         if siwe_message.domain != expected_domain:
              logger.warning(f"SIWE domain mismatch: Expected {expected_domain}, Got {siwe_message.domain}")
-             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Domain mismatch. Expected {expected_domain}"
-             )
+             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Domain mismatch. Expected {expected_domain}")
 
-        # 3. Check nonce validity and expiration
-        now = datetime.now()
+        now = datetime.now(timezone.utc) # Use timezone-aware
         nonce_creation_time = _nonce_store.get(siwe_message.nonce)
         if not nonce_creation_time:
             logger.warning(f"SIWE nonce not found or already used: {siwe_message.nonce}")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired nonce."
-            )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired nonce.")
 
         if (now - nonce_creation_time).total_seconds() > NONCE_EXPIRATION_SECONDS:
             logger.warning(f"SIWE nonce expired: {siwe_message.nonce}")
-            # Clean up expired nonce immediately
-            try:
-                del _nonce_store[siwe_message.nonce]
-            except KeyError:
-                pass
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Expired nonce."
-            )
+            try: del _nonce_store[siwe_message.nonce]
+            except KeyError: pass
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Expired nonce.")
 
-        # 4. Consume nonce (prevent replay attacks)
         try:
             del _nonce_store[siwe_message.nonce]
             logger.info(f"Nonce consumed: {siwe_message.nonce}")
         except KeyError:
-             # Should not happen if check above passed, but handle defensively
              logger.error(f"Attempted to consume nonce {siwe_message.nonce} that was already removed.")
-             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Nonce already used."
-            )
+             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Nonce already used.")
 
-        # TODO: Check issued_at / expiration_time fields in message if needed
+        # --- Verification Successful - Generate JWT ---
+        access_token_expires = timedelta(minutes=config.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": siwe_message.address}, expires_delta=access_token_expires
+        )
+        logger.info(f"JWT generated successfully for address: {siwe_message.address}")
 
-        # --- Verification Successful ---
-        # At this point, the user address (siwe_message.address) is authenticated.
-        # For simple use cases, we can just return the address.
-        # For persistent sessions, generate and return a JWT here.
-        logger.info(f"SIWE verification successful for address: {siwe_message.address}")
-        return VerifyResponse(address=siwe_message.address)
+        return VerifyResponse(
+            address=siwe_message.address,
+            access_token=access_token,
+            token_type="bearer" # Included via model default
+        )
 
     except ValueError as ve:
-        # siwe-py raises ValueError for signature/message issues
         logger.warning(f"SIWE verification failed (ValueError): {ve}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Signature verification failed: {ve}"
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Signature verification failed: {ve}")
     except HTTPException as http_exc:
-        # Re-raise specific HTTPExceptions from checks above
         raise http_exc
     except Exception as e:
-        # Catch-all for unexpected errors
         logger.error(f"Unexpected error during SIWE verification: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An internal error occurred during verification."
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An internal error occurred during verification.")
+
+
+# --- Secure Dependency for Authenticated User ---
+async def get_current_active_user(token: str = Depends(oauth2_scheme)) -> str:
+    """
+    Dependency that verifies the JWT token from the Authorization header
+    and returns the user's address (subject of the token).
+    Raises HTTPException 401 if the token is invalid or expired.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(
+            token, config.JWT_SECRET_KEY, algorithms=[config.JWT_ALGORITHM]
         )
+        # Extract the address from the 'sub' claim
+        address: str | None = payload.get("sub")
+        if address is None:
+            logger.warning("Token payload missing 'sub' (address) claim.")
+            raise credentials_exception
+
+        # Validate payload structure (optional but good practice)
+        token_data = TokenData(sub=address)
+
+    except JWTError as e:
+        logger.warning(f"JWT Error during token decoding: {e}")
+        raise credentials_exception
+    except ValidationError as e:
+         logger.warning(f"JWT payload validation error: {e}")
+         raise credentials_exception
+
+    # TODO: Could add extra checks here, e.g., check if user is active in a DB
+
+    # Return the address (user identifier)
+    return token_data.sub
+
+
+# --- REMOVE THE INSECURE PLACEHOLDER ---
+# async def get_current_user_address_insecure(request: Request) -> str:
+#     ... (Removed) ...
 
 # --- Dependency for authenticated user (Example) ---
 # This part would typically involve session tokens (JWT) generated after successful verify
 # For now, we'll create a placeholder dependency that expects the address in a header
 # (THIS IS NOT SECURE FOR PRODUCTION - REPLACE WITH TOKEN-BASED AUTH)
-async def get_current_user_address_insecure(request: Request) -> str:
-    """Placeholder dependency: Gets address from a header (INSECURE - FOR DEMO ONLY)."""
-    user_address = request.headers.get("X-User-Address")
-    if not user_address:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated (Missing X-User-Address header - demo only)"
-        )
-    # TODO: Add address validation (e.g., using web3.is_address)
-    return user_address 
+# async def get_current_user_address_insecure(request: Request) -> str:
+#     """Placeholder dependency: Gets address from a header (INSECURE - FOR DEMO ONLY)."""
+#     user_address = request.headers.get("X-User-Address")
+#     if not user_address:
+#         raise HTTPException(
+#             status_code=status.HTTP_401_UNAUTHORIZED,
+#             detail="Not authenticated (Missing X-User-Address header - demo only)"
+#         )
+#     # TODO: Add address validation (e.g., using web3.is_address)
+#     return user_address 
