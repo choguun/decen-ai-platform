@@ -6,14 +6,36 @@ from hexbytes import HexBytes
 import json
 import logging
 import time
+import os # For path joining
 from typing import Dict, List, Any # Import typing helpers
 
 from .. import config
 
 logger = logging.getLogger(__name__)
 
-# TODO: Add contract ABI (e.g., load from a JSON file)
-CONTRACT_ABI = [] # Replace with your actual contract ABI
+# --- ABI Loading ---
+# Calculate path relative to this file's location (backend/services)
+_SERVICE_DIR = os.path.dirname(__file__)
+_BACKEND_DIR = os.path.abspath(os.path.join(_SERVICE_DIR, os.pardir))
+# Adjust path if your contract output is different
+_ABI_FILE_PATH = os.path.join(_BACKEND_DIR, os.pardir, "contracts", "out", "ProvenanceLedger.sol", "ProvenanceLedger.json")
+
+CONTRACT_ABI = None
+try:
+    with open(_ABI_FILE_PATH, 'r') as f:
+        # Foundry output contains more than just the ABI, extract it.
+        contract_artifact = json.load(f)
+        CONTRACT_ABI = contract_artifact.get('abi')
+        if CONTRACT_ABI:
+            logger.info(f"Successfully loaded contract ABI from: {_ABI_FILE_PATH}")
+        else:
+             logger.error(f"'abi' key not found in artifact file: {_ABI_FILE_PATH}")
+except FileNotFoundError:
+    logger.error(f"CRITICAL: Contract ABI file not found at: {_ABI_FILE_PATH}. Contract interactions will fail.")
+except json.JSONDecodeError as e:
+     logger.error(f"CRITICAL: Failed to parse ABI JSON file {_ABI_FILE_PATH}: {e}")
+except Exception as e:
+    logger.error(f"CRITICAL: An unexpected error occurred loading ABI from {_ABI_FILE_PATH}: {e}", exc_info=True)
 
 if not config.FVM_RPC_URL:
     # Log error, but allow app to start potentially
@@ -48,74 +70,21 @@ else:
         logger.error(f"Invalid BACKEND_WALLET_PRIVATE_KEY: {e}")
         account = None
 
-# --- Contract ABI (Placeholder) ---
-# TODO: Replace with your actual contract ABI - load from a JSON file ideally
-DEFAULT_CONTRACT_ABI = json.dumps([
-    {
-        "inputs": [
-            {"internalType": "address", "name": "_owner", "type": "address"},
-            {"internalType": "string", "name": "_datasetCid", "type": "string"},
-            {"internalType": "string", "name": "_modelCid", "type": "string"},
-            {"internalType": "string", "name": "_metadataCid", "type": "string"}
-        ],
-        "name": "registerAsset",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    # Added placeholder ABI for getAssetByCid
-    {
-        "inputs": [{"internalType": "string", "name": "_cid", "type": "string"}],
-        "name": "getAssetByCid",
-        # Adjust output struct based on your contract's AssetRecord
-        "outputs": [
-            {
-                "components": [
-                    {"internalType": "address", "name": "owner", "type": "address"},
-                    {"internalType": "string", "name": "datasetCid", "type": "string"},
-                    {"internalType": "string", "name": "modelCid", "type": "string"},
-                    {"internalType": "string", "name": "metadataCid", "type": "string"},
-                    {"internalType": "uint256", "name": "timestamp", "type": "uint256"}
-                 ],
-                 "internalType": "struct YourContractName.AssetRecord", # Replace YourContractName
-                 "name": "record",
-                 "type": "tuple"
-             }
-         ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    # Added placeholder ABI for getAssetsByOwner
-    {
-        "inputs": [{"internalType": "address", "name": "_owner", "type": "address"}],
-        "name": "getAssetsByOwner",
-        # Adjust output struct based on your contract's AssetRecord
-        "outputs": [
-            {
-                "components": [
-                    {"internalType": "address", "name": "owner", "type": "address"},
-                    {"internalType": "string", "name": "datasetCid", "type": "string"},
-                    {"internalType": "string", "name": "modelCid", "type": "string"},
-                    {"internalType": "string", "name": "metadataCid", "type": "string"},
-                    {"internalType": "uint256", "name": "timestamp", "type": "uint256"}
-                 ],
-                 "internalType": "struct YourContractName.AssetRecord[]", # Replace YourContractName
-                 "name": "records",
-                 "type": "tuple[]"
-             }
-         ],
-        "stateMutability": "view",
-        "type": "function"
-    }
-])
-
 # --- Load Contract Instance ---
 try:
-    if w3 and config.CONTRACT_ADDRESS:
-        contract = w3.eth.contract(address=Web3.to_checksum_address(config.CONTRACT_ADDRESS), abi=DEFAULT_CONTRACT_ABI)
+    # Use the loaded CONTRACT_ABI instead of DEFAULT_CONTRACT_ABI
+    if w3 and config.CONTRACT_ADDRESS and CONTRACT_ABI:
+        contract = w3.eth.contract(address=Web3.to_checksum_address(config.CONTRACT_ADDRESS), abi=CONTRACT_ABI)
         logger.info(f"Contract instance created for address: {config.CONTRACT_ADDRESS}")
     else:
         contract = None
+        if not CONTRACT_ABI:
+             logger.error("Cannot create contract instance: ABI not loaded.")
+        elif not w3:
+             logger.error("Cannot create contract instance: Web3 not connected.")
+        elif not config.CONTRACT_ADDRESS:
+             logger.error("Cannot create contract instance: CONTRACT_ADDRESS not set.")
+
 except Exception as e:
     logger.error(f"Failed to create contract instance: {e}", exc_info=True)
     contract = None
