@@ -1,0 +1,43 @@
+# Git files
+.git
+.gitignore
+
+# Python specific
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environments
+backend/venv
+.env # IMPORTANT: Never include .env files in the image
+backend/.env
+contracts/.env
+
+# IDE / OS files
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Build artifacts / Dependencies (Contracts)
+contracts/out
+contracts/cache
+contracts/lib
+contracts/node_modules
+
+# Build artifacts / Dependencies (Frontend - if exists)
+# frontend/node_modules
+# frontend/.next
+# frontend/out
+
+# Documentation / Other
+README.md
+*.mdc
+
+# Temp files
+*.tmp
+*.bak
+*.swp 
