@@ -5,3 +5,10 @@ libs = ['lib']
 solc_version = '0.8.24' # Or your preferred recent version
 
 # See more config options https://book.getfoundry.sh/reference/config.html
+rpc_endpoints = { calibrationnet = '${CALIBRATIONNET_RPC_URL}' }
+chain_id = 314159
+fuzz_runs = 256
+optimizer = true
+
+[profile.default.optimizer_details]
+yul = false

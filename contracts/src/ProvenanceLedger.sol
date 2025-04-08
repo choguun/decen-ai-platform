@@ -47,7 +47,8 @@ contract ProvenanceLedger is Ownable {
     event AssetRegistered(
         address indexed owner,
         uint256 timestamp,
-        string indexed assetType,
+        string name,
+        string assetType,
         string filecoinCid
     );
 
@@ -107,7 +108,7 @@ contract ProvenanceLedger is Ownable {
         cidRegistered[filecoinCid] = true;
 
         // Emit the event
-        emit AssetRegistered(ownerAddress, block.timestamp, assetType, filecoinCid);
+        emit AssetRegistered(ownerAddress, block.timestamp, name, assetType, filecoinCid);
     }
 
     /**
