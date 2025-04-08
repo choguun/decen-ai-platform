@@ -46,9 +46,10 @@ def upload_file(file_path: str) -> str | None:
 
 def download_file(cid: str, output_path: str) -> bool:
     """Downloads a file from Lighthouse Storage gateway using its CID."""
-    # Basic CID format check (very basic, not exhaustive)
-    if not cid or not isinstance(cid, str) or not cid.startswith('Qm') and not cid.startswith('bafy'):
-        logger.error(f"Invalid CID format provided for download: {cid}")
+    # Relaxed CID check: Ensure it's a non-empty string.
+    # The gateway request will fail if the CID is actually invalid.
+    if not cid or not isinstance(cid, str):
+        logger.error(f"Invalid or empty CID provided for download: {cid!r}") # Use !r for clearer logging of type/value
         return False
 
     gateway_url = f"https://gateway.lighthouse.storage/ipfs/{cid}"
@@ -75,9 +76,16 @@ def download_file(cid: str, output_path: str) -> bool:
     except requests.exceptions.RequestException as e:
         # More specific error logging
         if isinstance(e, requests.exceptions.HTTPError):
-            logger.error(f"HTTP Error {e.response.status_code} downloading CID {cid}: {e.response.text}")
-        else:
-            logger.error(f"Network or request error downloading CID {cid}: {e}", exc_info=True)
+            # This case is already handled by response.raise_for_status(), but good to be explicit
+            logger.error(f"HTTP Error {e.response.status_code} downloading CID {cid} from {gateway_url}: {e.response.text}")
+        elif isinstance(e, requests.exceptions.ConnectionError):
+             logger.error(f"Connection Error downloading CID {cid} from {gateway_url}: {e}", exc_info=True) # Show traceback for connection issues
+        elif isinstance(e, requests.exceptions.Timeout):
+             logger.error(f"Timeout Error downloading CID {cid} from {gateway_url}: {e}", exc_info=True)
+        elif isinstance(e, requests.exceptions.SSLError):
+             logger.error(f"SSL Error downloading CID {cid} from {gateway_url}: {e}", exc_info=True) # Show traceback for SSL issues
+        else: # Catch-all for other RequestExceptions
+            logger.error(f"Network or request error downloading CID {cid} from {gateway_url}: {type(e).__name__} - {e}", exc_info=True)
         return False
     except IOError as e:
         logger.error(f"Error writing downloaded file to {output_path}: {e}", exc_info=True)
