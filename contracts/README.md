@@ -48,7 +48,7 @@ $ anvil
 ### Deploy
 
 ```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
+$ forge script script/DeployProvenanceLedger.s.sol:DeployProvenanceLedger --rpc-url https://rpc.ankr.com/filecoin_testnet --broadcast --skip-simulation
 ```
 
 ### Cast
