@@ -12,7 +12,8 @@ import { getAuthToken } from "@/components/auth/connect-wallet-button";
 import { Loader2, ExternalLink } from 'lucide-react';
 
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000';
-const ipfsGateway = 'https://ipfs.io/ipfs/';
+const ipfsGateway = 'https://files.lighthouse.storage/viewFile/';
+const filecoinExplorerTx = 'https://calibration.filscan.io/en/message/'; // Explorer URL
 
 // Update interface to match backend AssetRecord Pydantic model
 interface AssetRecord {
@@ -23,7 +24,7 @@ interface AssetRecord {
   metadataCid?: string | null;
   sourceAssetCid?: string | null;
   timestamp: number;
-  // txHash is not available from current backend data
+  txHash: string; // Added txHash
 }
 
 export function ProvenanceViewer() {
@@ -101,6 +102,18 @@ export function ProvenanceViewer() {
       );
   };
 
+  // Re-add TxHash link function
+  const renderTxHashLink = (hash: string | undefined | null) => {
+      if (!hash) return 'N/A';
+      const truncated = `${hash.substring(0, 8)}...${hash.substring(hash.length - 6)}`;
+      return (
+          <a href={`${filecoinExplorerTx}0x${hash}`} target="_blank" rel="noopener noreferrer" title={hash} className="inline-flex items-center gap-1 hover:underline text-blue-600">
+              {truncated}
+              <ExternalLink className="h-3 w-3" />
+          </a>
+      );
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -131,15 +144,17 @@ export function ProvenanceViewer() {
                     <TableHead>Type</TableHead>
                     <TableHead>CID</TableHead>
                     <TableHead>Timestamp</TableHead>
+                    <TableHead>Tx Hash</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {provenanceRecords.map((record, index) => (
-                    <TableRow key={record.filecoinCid + index}>
+                    <TableRow key={record.filecoinCid + index + record.txHash}>
                       <TableCell className="font-medium max-w-[150px] truncate" title={record.name}>{record.name || '-'}</TableCell>
                       <TableCell>{record.assetType}</TableCell>
                       <TableCell>{renderCidLink(record.filecoinCid)}</TableCell>
                       <TableCell>{formatTimestamp(record.timestamp)}</TableCell>
+                      <TableCell>{renderTxHashLink(record.txHash)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
