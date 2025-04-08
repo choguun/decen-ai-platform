@@ -7,6 +7,7 @@ import logging
 from ..services import lighthouse_service
 from ..models.data_models import UploadResponse, ErrorResponse
 from ..routers.auth import get_current_active_user
+from ..services import fvm_service
 
 router = APIRouter(
     prefix="/data",
@@ -48,7 +49,27 @@ def upload_dataset(
             cid = lighthouse_service.upload_file(temp_file_path)
 
             if cid:
-                logger.info(f"Dataset {file.filename} uploaded successfully. CID: {cid}")
+                logger.info(f"Dataset {file.filename} uploaded successfully. Lighthouse CID: {cid}")
+
+                # --- Register Provenance on FVM --- 
+                try:
+                    logger.info(f"Registering provenance for dataset CID {cid} from owner {current_user_address}")
+                    tx_hash = fvm_service.register_asset_provenance(
+                        owner_address=current_user_address,
+                        asset_type="Dataset",
+                        name=file.filename,
+                        dataset_cid=cid,
+                        model_cid=None,
+                        metadata_cid=None
+                    )
+                    if tx_hash:
+                        logger.info(f"Provenance registered successfully. Tx Hash: {tx_hash}")
+                    else:
+                        logger.warning(f"Provenance registration failed for dataset CID {cid}. FVM service returned None.")
+                except Exception as fvm_exc:
+                    logger.error(f"Error during FVM provenance registration for dataset CID {cid}: {fvm_exc}", exc_info=True)
+
+                # --- Return Success Response --- 
                 return UploadResponse(
                     filename=file.filename,
                     content_type=file.content_type,

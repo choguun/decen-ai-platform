@@ -8,6 +8,9 @@ FVM_RPC_URL = os.getenv("FVM_RPC_URL")
 BACKEND_WALLET_PRIVATE_KEY = os.getenv("BACKEND_WALLET_PRIVATE_KEY")
 CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS")
 
+# Expected Frontend Origin (for SIWE domain validation)
+EXPECTED_FRONTEND_DOMAIN = os.getenv("EXPECTED_FRONTEND_DOMAIN", "localhost:3000") # Default to localhost:3000 for dev
+
 # JWT Settings
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")

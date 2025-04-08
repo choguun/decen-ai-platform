@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import logging # Add logging config
 
 # Configure basic logging
@@ -13,12 +14,30 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# --- CORS Configuration ---
+# Define allowed origins (adjust as needed for production)
+# For development, allow the Next.js frontend origin
+origins = [
+    "http://localhost:3000", # Next.js frontend
+    # Add your deployed frontend URL here for production
+    # e.g., "https://your-frontend-domain.com",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # List of origins that are allowed to make requests
+    allow_credentials=True, # Allow cookies/authorization headers
+    allow_methods=["*"],    # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],    # Allow all headers
+)
+
 # Include routers
 app.include_router(auth.router) # Include auth router
 app.include_router(data.router)
 app.include_router(training.router) # Include training router
 app.include_router(inference.router) # Include inference router
 app.include_router(provenance.router) # Include provenance router
+
 
 @app.get("/", tags=["Health Check"])
 def read_root():

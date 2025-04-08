@@ -97,6 +97,7 @@ def run_training_job(
         update_job_status(job_id, "REGISTERING_PROVENANCE")
         fvm_tx_hash = fvm_service.register_asset_provenance(
             owner_address=owner_address,
+            asset_type="Model",
             dataset_cid=dataset_cid,
             model_cid=model_cid,
             metadata_cid=model_info_cid

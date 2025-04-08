@@ -5,7 +5,7 @@ class NonceResponse(BaseModel):
     nonce: str = Field(..., description="Unique nonce for the SIWE message.")
 
 class VerifyRequest(BaseModel):
-    message: Dict[str, Any] = Field(..., description="The SIWE message object.")
+    message: Dict[str, Any] = Field(..., description="The dictionary representing the SIWE message fields.")
     signature: str = Field(..., description="The signature provided by the user's wallet.")
 
 class VerifyResponse(BaseModel):

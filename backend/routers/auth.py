@@ -84,18 +84,21 @@ def verify_signature(verify_request: VerifyRequest, request: Request):
     - **signature**: The hex-encoded signature string.
     """
     try:
-        siwe_message = SiweMessage(message=verify_request.message)
+        # Parse the message by creating SiweMessage from the dictionary
+        # Unpack the dictionary received in verify_request.message
+        siwe_message = SiweMessage(**verify_request.message)
+        
+        # Verify the signature against the constructed message object.
+        # The nonce/domain/etc. are part of the siwe_message object now.
         siwe_message.verify(verify_request.signature)
+        
         logger.info(f"SIWE signature verified successfully for address: {siwe_message.address}")
 
-        # TODO: Get expected domain from config/env more reliably
-        expected_domain = request.url.hostname
-        if siwe_message.domain != expected_domain:
-             logger.warning(f"SIWE domain mismatch: Expected {expected_domain}, Got {siwe_message.domain}")
-             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Domain mismatch. Expected {expected_domain}")
-
+        # --- Nonce Validation --- 
+        # Check if nonce exists in our store and is not expired
         now = datetime.now(timezone.utc) # Use timezone-aware
         nonce_creation_time = _nonce_store.get(siwe_message.nonce)
+        
         if not nonce_creation_time:
             logger.warning(f"SIWE nonce not found or already used: {siwe_message.nonce}")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired nonce.")
@@ -105,7 +108,22 @@ def verify_signature(verify_request: VerifyRequest, request: Request):
             try: del _nonce_store[siwe_message.nonce]
             except KeyError: pass
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Expired nonce.")
+        
+        # --- Domain Validation --- 
+        # Compare against the expected frontend domain from config
+        expected_domain = config.EXPECTED_FRONTEND_DOMAIN # Assumes this exists in config
+        
+        if not expected_domain:
+            # Configuration error
+            logger.error("Missing EXPECTED_FRONTEND_DOMAIN configuration.")
+            # Don't expose config details, raise a generic internal error
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server configuration error.")
+        
+        if siwe_message.domain != expected_domain:
+             logger.warning(f"SIWE domain mismatch: Expected '{expected_domain}', Got '{siwe_message.domain}'")
+             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Domain mismatch. Signature is not valid for this application.") # More generic error message
 
+        # --- Consume Nonce --- 
         try:
             del _nonce_store[siwe_message.nonce]
             logger.info(f"Nonce consumed: {siwe_message.nonce}")
