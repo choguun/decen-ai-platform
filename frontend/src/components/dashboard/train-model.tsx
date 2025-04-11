@@ -8,11 +8,13 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { getAuthToken } from "@/components/auth/connect-wallet-button";
 import { Loader2, ExternalLink } from 'lucide-react';
 
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000';
-const filecoinExplorerTx = 'https://filscan.io/tx/';
+const filecoinExplorerTx = 'https://calibration.filscan.io/en/message/';
 
 // --- Type Definition ---
 interface TrainingStatus {
@@ -31,6 +33,9 @@ interface TrainingStatus {
 
 export function TrainModel() {
   const [datasetCid, setDatasetCid] = useState("");
+  const [modelType, setModelType] = useState<string>("");
+  const [targetColumn, setTargetColumn] = useState<string>("");
+  const [hyperparametersJson, setHyperparametersJson] = useState<string>("");
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<TrainingStatus | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -108,6 +113,32 @@ export function TrainModel() {
       toast.error("Please enter a Dataset CID.");
       return;
     }
+    if (!modelType) {
+      setSubmitError("Please select a Model Type.");
+      toast.error("Please select a Model Type.");
+      return;
+    }
+    if (!targetColumn) {
+      setSubmitError("Please enter the Target Column name.");
+      toast.error("Please enter the Target Column name.");
+      return;
+    }
+
+    let hyperparameters = {};
+    if (hyperparametersJson) {
+        try {
+            hyperparameters = JSON.parse(hyperparametersJson);
+            if (typeof hyperparameters !== 'object' || hyperparameters === null || Array.isArray(hyperparameters)) {
+                throw new Error("Hyperparameters must be a valid JSON object.");
+            }
+        } catch (e: any) {
+            const errorMsg = e instanceof Error ? e.message : "Invalid JSON format for Hyperparameters.";
+            setSubmitError(errorMsg);
+            toast.error(errorMsg);
+            return;
+        }
+    }
+
     const token = getAuthToken();
     if (!token) {
       setSubmitError("Authentication required. Please sign in.");
@@ -124,8 +155,16 @@ export function TrainModel() {
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
 
     try {
+      const payload = {
+          dataset_cid: datasetCid,
+          model_type: modelType,
+          target_column: targetColumn,
+          hyperparameters: hyperparameters, 
+      };
+      console.debug("Submitting training job with payload:", payload);
+
       const response = await axios.post(`${backendUrl}/training/start`,
-        { dataset_cid: datasetCid },
+        payload,
         {
           headers: { 'Authorization': `Bearer ${token}` },
         }
@@ -172,19 +211,66 @@ export function TrainModel() {
     <Card>
       <CardHeader>
         <CardTitle>Train Model</CardTitle>
-        <CardDescription>Enter a dataset CID and start training.</CardDescription>
+        <CardDescription>Configure and start a model training job.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid w-full max-w-sm items-center gap-1.5">
-            <Label htmlFor="dataset-cid-train">Dataset CID</Label>
-            <Input
-                id="dataset-cid-train"
-                placeholder="Enter dataset CID..."
-                value={datasetCid}
-                onChange={(e) => { setDatasetCid(e.target.value); setSubmitError(null); }}
-                disabled={isSubmitting || isPolling}
-             />
-         </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+                <Label htmlFor="dataset-cid-train">Dataset CID</Label>
+                <Input
+                    id="dataset-cid-train"
+                    placeholder="Enter dataset CID..."
+                    value={datasetCid}
+                    onChange={(e) => { setDatasetCid(e.target.value); setSubmitError(null); }}
+                    disabled={isSubmitting || isPolling}
+                />
+            </div>
+
+            <div className="space-y-1.5">
+                 <Label htmlFor="model-type">Model Type</Label>
+                 <Select 
+                    value={modelType} 
+                    onValueChange={(value: string) => { setModelType(value); setSubmitError(null); }} 
+                    disabled={isSubmitting || isPolling}
+                >
+                    <SelectTrigger id="model-type">
+                        <SelectValue placeholder="Select a model..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="RandomForest">Random Forest</SelectItem>
+                        <SelectItem value="XGBoost">XGBoost</SelectItem>
+                        <SelectItem value="LogisticRegression">Logistic Regression</SelectItem>
+                    </SelectContent>
+                </Select>
+            </div>
+
+             <div className="space-y-1.5 md:col-span-2">
+                <Label htmlFor="target-column">Target Column Name</Label>
+                <Input
+                    id="target-column"
+                    placeholder="Enter the exact name of the target variable column..."
+                    value={targetColumn}
+                    onChange={(e) => { setTargetColumn(e.target.value); setSubmitError(null); }}
+                    disabled={isSubmitting || isPolling}
+                 />
+            </div>
+
+            <div className="space-y-1.5 md:col-span-2">
+                <Label htmlFor="hyperparameters">Hyperparameters (JSON format, optional)</Label>
+                <Textarea
+                    id="hyperparameters"
+                    placeholder='{ "n_estimators": 100, "max_depth": 5 }'
+                    value={hyperparametersJson}
+                    onChange={(e) => { setHyperparametersJson(e.target.value); setSubmitError(null); }}
+                    disabled={isSubmitting || isPolling}
+                    rows={4}
+                />
+                <p className="text-xs text-muted-foreground">
+                    Enter parameters as a JSON object, e.g., {`{"n_estimators": 100}`}.
+                </p>
+            </div>
+        </div>
+
          {submitError && (
              <p className="text-sm text-red-600">Error: {submitError}</p>
          )}
@@ -243,7 +329,10 @@ export function TrainModel() {
          </div>
       </CardContent>
       <CardFooter>
-        <Button onClick={handleStartTraining} disabled={!datasetCid || isSubmitting || isPolling}>
+        <Button 
+            onClick={handleStartTraining} 
+            disabled={!datasetCid || !modelType || !targetColumn || isSubmitting || isPolling}
+        >
           {isSubmitting ? (
               <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Submitting...</>
           ) : (
