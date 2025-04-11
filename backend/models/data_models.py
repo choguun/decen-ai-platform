@@ -13,6 +13,9 @@ class ErrorResponse(BaseModel):
 
 class TrainRequest(BaseModel):
     dataset_cid: str = Field(..., description="CID of the dataset file on Lighthouse/IPFS to be used for training.")
+    model_type: str = Field(..., description="Type of the ML model to train (e.g., RandomForest, XGBoost).")
+    target_column: str = Field(..., description="Name of the target variable column in the dataset.")
+    hyperparameters: Dict[str, Any] = Field({}, description="Hyperparameters for the model as a JSON object.") # Default to empty dict
     # Add other potential training parameters here later if needed
     # e.g., model_type: str = "RandomForestClassifier"
     # e.g., hyperparameters: Dict[str, Any] = None

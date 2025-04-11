@@ -1,6 +1,8 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+import xgboost as xgb
 from sklearn.metrics import accuracy_score
 import joblib
 import os
@@ -11,12 +13,20 @@ from typing import Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-def train_model_on_dataset(dataset_path: str) -> Tuple[Any, Dict[str, Any], str, str] | Tuple[None, None, None, None]:
+def train_model_on_dataset(
+    dataset_path: str,
+    model_type: str,
+    target_column: str,
+    hyperparameters: Dict[str, Any]
+) -> Tuple[Any, Dict[str, Any], str, str] | Tuple[None, None, None, None]:
     """
-    Trains a RandomForestClassifier model on the dataset located at dataset_path.
+    Trains a specified ML model on the dataset using provided parameters.
 
     Args:
         dataset_path: The file path to the dataset (e.g., CSV).
+        model_type: String identifier for the model (e.g., "RandomForest", "XGBoost").
+        target_column: The name of the column to predict.
+        hyperparameters: Dictionary of hyperparameters for the model.
 
     Returns:
         A tuple containing:
@@ -26,50 +36,104 @@ def train_model_on_dataset(dataset_path: str) -> Tuple[Any, Dict[str, Any], str,
         - The file path to the saved model info (.json).
         Returns (None, None, None, None) if training fails.
     """
-    logger.info(f"Starting model training using dataset: {dataset_path}")
+    logger.info(f"Starting model training. Dataset: {dataset_path}, Model: {model_type}, Target: {target_column}, Params: {hyperparameters}")
     try:
         # Load the dataset
         df = pd.read_csv(dataset_path)
         logger.info(f"Dataset loaded successfully. Shape: {df.shape}")
 
-        # Basic validation (assuming 'diabetes' is the target column)
-        if 'diabetes' not in df.columns:
-            logger.error("Target column 'diabetes' not found in the dataset.")
+        # --- Validate Target Column --- 
+        if target_column not in df.columns:
+            logger.error(f"Target column '{target_column}' not found in the dataset columns: {list(df.columns)}")
             return None, None, None, None
 
-        # Split features and target
-        X = df.drop('diabetes', axis=1)
-        y = df['diabetes']
+        # --- Separate features (X) and target (y) --- 
+        X = df.drop(target_column, axis=1)
+        y = df[target_column]
+        
+        # --- Preprocessing: Handle Categorical Features using One-Hot Encoding --- 
+        categorical_cols = X.select_dtypes(include=['object', 'category']).columns
+        if not categorical_cols.empty:
+            logger.info(f"Applying one-hot encoding to categorical columns: {list(categorical_cols)}")
+            X = pd.get_dummies(X, columns=list(categorical_cols), drop_first=True) # drop_first avoids multicollinearity
+            logger.info(f"Data shape after one-hot encoding: {X.shape}")
+        else:
+             logger.info("No categorical columns found requiring one-hot encoding.")
+
+        # Get feature names *after* potential encoding
         feature_names = list(X.columns)
 
-        # Split into training and testing sets
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        # --- Split into training and testing sets --- 
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42) # Use processed X
         logger.info(f"Data split into training ({len(X_train)} samples) and testing ({len(X_test)} samples).")
 
-        # Train a Random Forest classifier
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
-        model.fit(X_train, y_train)
-        logger.info("RandomForestClassifier model trained successfully.")
+        # --- Model Selection and Initialization --- 
+        model = None
+        sanitized_hyperparams = hyperparameters.copy()
+        
+        # Ensure random_state is passed if needed and present
+        if 'random_state' not in sanitized_hyperparams:
+            sanitized_hyperparams['random_state'] = 42 # Default random state
+            
+        try:
+            if model_type == "RandomForest":
+                # Only pass relevant params to avoid errors
+                valid_rf_params = {k: v for k, v in sanitized_hyperparams.items() if k in RandomForestClassifier().get_params()}
+                model = RandomForestClassifier(**valid_rf_params)
+                logger.info(f"Initializing RandomForestClassifier with params: {valid_rf_params}")
+            elif model_type == "XGBoost":
+                 # XGBoost specific handling (e.g., label encoding if needed)
+                 # Note: XGBoost might need target labels to be 0, 1, ...
+                 # Add preprocessing here if necessary based on y_train
+                 
+                 # Only pass relevant params
+                 valid_xgb_params = {k: v for k, v in sanitized_hyperparams.items() if k in xgb.XGBClassifier().get_params()}
+                 # Handle potential objective incompatibility if passed in params
+                 if 'objective' not in valid_xgb_params:
+                      # Infer objective based on target type (simplistic example)
+                      if len(y_train.unique()) == 2:
+                           valid_xgb_params['objective'] = 'binary:logistic'
+                      else:
+                           valid_xgb_params['objective'] = 'multi:softprob' # Or other appropriate objective
+                 
+                 model = xgb.XGBClassifier(**valid_xgb_params)
+                 logger.info(f"Initializing XGBClassifier with params: {valid_xgb_params}")
+            elif model_type == "LogisticRegression":
+                 # Only pass relevant params
+                 valid_lr_params = {k: v for k, v in sanitized_hyperparams.items() if k in LogisticRegression().get_params()}
+                 model = LogisticRegression(**valid_lr_params)
+                 logger.info(f"Initializing LogisticRegression with params: {valid_lr_params}")
+            else:
+                logger.error(f"Unsupported model_type: {model_type}")
+                return None, None, None, None
+                
+        except TypeError as te:
+             logger.error(f"Invalid hyperparameter provided for model type {model_type}. Error: {te}", exc_info=True)
+             return None, None, None, None
 
-        # Evaluate the model
+        # --- Train the selected model --- 
+        model.fit(X_train, y_train)
+        logger.info(f"{model_type} model trained successfully.")
+
+        # --- Evaluate the model --- 
         y_pred = model.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred)
         logger.info(f"Model evaluation completed. Accuracy: {accuracy:.4f}")
 
-        # Create model info dictionary
+        # --- Create model info dictionary --- 
         model_info = {
-            "model_type": "RandomForestClassifier",
-            "n_estimators": 100,
-            "random_state": 42,
+            "model_type": model_type, # Store actual model type used
+            "hyperparameters_used": sanitized_hyperparams, # Store parameters used
             "features": feature_names,
-            "target_column": "diabetes",
+            "target_column": target_column, # Store actual target column used
             "accuracy": float(accuracy),
             "training_samples": int(len(X_train)),
             "test_samples": int(len(X_test)),
-            "dataset_source_path": dataset_path # Keep track of source for reference
+            # Remove dataset_source_path if not needed downstream
+            # "dataset_source_path": dataset_path 
         }
 
-        # Save model and info to temporary files
+        # --- Save model and info --- 
         temp_dir = tempfile.mkdtemp()
         model_filename = "trained_model.joblib"
         info_filename = "model_info.json"

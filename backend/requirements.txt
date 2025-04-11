@@ -15,4 +15,4 @@ joblib>=1.2.0
 requests>=2.28.0
 
 python-multipart>=0.0.20
-# Remove redundant commented-out ML deps 
+xgboost>=2.1.0

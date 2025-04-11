@@ -6,7 +6,7 @@ import json
 import shutil
 import uuid # For generating job IDs
 from datetime import datetime, timezone # For timestamps
-from typing import Dict # For job store type hint
+from typing import Dict, Any # For job store type hint
 
 from ..services import lighthouse_service, ml_service, fvm_service
 from ..models.data_models import TrainRequest, TrainResponse, ErrorResponse, TrainingStatusResponse
@@ -40,12 +40,15 @@ def update_job_status(job_id: str, status: str, message: str | None = None, **kw
         logger.warning(f"Attempted to update status for unknown job_id: {job_id}")
 
 def run_training_job(
-    job_id: str, # Add job_id
+    job_id: str, 
     dataset_cid: str,
-    owner_address: str
+    owner_address: str,
+    model_type: str,
+    target_column: str,
+    hyperparameters: Dict[str, Any]
 ):
     """Background task to run the full training pipeline, updating status."""
-    logger.info(f"Background training job {job_id} started for dataset CID: {dataset_cid} by owner: {owner_address}")
+    logger.info(f"Background training job {job_id} started. Dataset: {dataset_cid}, Owner: {owner_address}, Model: {model_type}, Target: {target_column}, Params: {hyperparameters}")
     temp_dir = None
     model_cid = None # Define potential result vars here
     model_info_cid = None
@@ -67,14 +70,26 @@ def run_training_job(
 
         # 2. Train model
         update_job_status(job_id, "TRAINING")
-        model, model_info, model_path, info_path = ml_service.train_model_on_dataset(downloaded_dataset_path)
+        model, model_info, model_path, info_path = ml_service.train_model_on_dataset(
+            dataset_path=downloaded_dataset_path,
+            model_type=model_type,
+            target_column=target_column,
+            hyperparameters=hyperparameters
+        )
         if not model or not model_info or not model_path or not info_path:
             logger.error(f"Job {job_id}: Model training failed for dataset {dataset_cid}")
             update_job_status(job_id, "FAILED", "Model training process failed.")
             return
+        
+        # Store parameters used in metadata
         accuracy = model_info.get('accuracy')
         model_info['source_dataset_cid'] = dataset_cid
         model_info['owner_address'] = owner_address
+        model_info['model_type'] = model_type
+        model_info['target_column'] = target_column
+        model_info['hyperparameters_used'] = hyperparameters
+        
+        # Update info file before uploading
         with open(info_path, 'w') as f:
             json.dump(model_info, f, indent=2)
 
@@ -98,6 +113,7 @@ def run_training_job(
         fvm_tx_hash = fvm_service.register_asset_provenance(
             owner_address=owner_address,
             asset_type="Model",
+            name="",
             dataset_cid=dataset_cid,
             model_cid=model_cid,
             metadata_cid=model_info_cid
@@ -159,7 +175,7 @@ def start_training(
 
     - **dataset_cid**: CID of the dataset to train on.
     """
-    logger.info(f"User {current_user_address} requesting training for dataset CID: {train_request.dataset_cid}")
+    logger.info(f"User {current_user_address} requesting training. Payload: {train_request.dict()}")
 
     # Generate a unique Job ID
     job_id = str(uuid.uuid4())
@@ -177,12 +193,15 @@ def start_training(
     _training_jobs[job_id] = initial_status
     logger.info(f"Created training job {job_id} with PENDING status.")
 
-    # Add the training job to background tasks, passing the job ID
+    # Add the training job to background tasks, passing the new parameters
     background_tasks.add_task(
         run_training_job,
-        job_id=job_id, # Pass job ID
+        job_id=job_id,
         dataset_cid=train_request.dataset_cid,
-        owner_address=current_user_address
+        owner_address=current_user_address,
+        model_type=train_request.model_type,
+        target_column=train_request.target_column,
+        hyperparameters=train_request.hyperparameters
     )
 
     # Return job ID in the initial response
