@@ -55,6 +55,10 @@ export function TrainModel() {
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
+  // --- New State Variables --- 
+  const [modelName, setModelName] = useState<string>("");
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   // Function to fetch job status
   const fetchJobStatus = async (currentJobId: string) => {
@@ -67,11 +71,13 @@ export function TrainModel() {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       setJobStatus(response.data);
-      if (response.data.status === 'COMPLETED' || response.data.status === 'FAILED') {
+      if (response.data.status === 'TRAINING_COMPLETE' || response.data.status === 'COMPLETED' || response.data.status === 'FAILED') {
         setIsPolling(false);
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-        if (response.data.status === 'COMPLETED') {
-             toast.success(`Training job ${currentJobId} completed! Model CID: ${response.data.model_cid}`)
+        if (response.data.status === 'TRAINING_COMPLETE') {
+             toast.success(`Training job ${currentJobId} complete. Ready for upload.`);
+        } else if (response.data.status === 'COMPLETED') {
+             toast.success(`Training job ${currentJobId} completed successfully (already uploaded).`)
         } else {
              toast.error(`Training job ${currentJobId} failed: ${response.data.message || 'Unknown error'}`)
              setStatusError(response.data.message || 'Training job failed with unknown error');
@@ -212,6 +218,10 @@ export function TrainModel() {
     setJobStatus(null);
     setIsPolling(false);
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    // Reset upload state as well when starting new training
+    setIsUploading(false);
+    setUploadError(null);
+    setModelName("");
 
     try {
       const payload = {
@@ -256,13 +266,78 @@ export function TrainModel() {
   const getStatusVariant = (status: string): "default" | "secondary" | "destructive" | "outline" => {
       switch (status.toUpperCase()) {
           case 'COMPLETED': return 'default';
+          case 'TRAINING_COMPLETE': return 'outline';
           case 'PENDING':
           case 'DOWNLOADING':
           case 'TRAINING':
           case 'UPLOADING_MODEL': return 'secondary';
           case 'FAILED':
-          case 'ERROR': return 'destructive';
+          case 'ERROR':
+          case 'UPLOAD_FAILED': return 'destructive';
           default: return 'outline';
+      }
+  };
+
+  // Placeholder for the new upload function
+  const handleUploadModel = async () => {
+      if (!jobId) {
+          toast.error("No completed training job found.");
+          setUploadError("Cannot upload: No Job ID.");
+          return;
+      }
+      // Model name is optional now
+      // if (!modelName) {
+      //     toast.error("Please provide a name for the model.");
+      //     setUploadError("Model name is required.");
+      //     return;
+      // }
+
+      const token = getAuthToken();
+      if (!token) {
+          toast.error("Authentication required.");
+          setUploadError("Please sign in first.");
+          return;
+      }
+
+      setIsUploading(true);
+      setUploadError(null);
+      toast.info(`Uploading model for job ${jobId}...`);
+
+      // --- API Call to Upload/Register Endpoint --- 
+      try {
+          const response = await axios.post(`${backendUrl}/models/${jobId}/upload`,
+             { model_name: modelName || undefined }, // Send optional model name (null/undefined if empty)
+             { headers: { 'Authorization': `Bearer ${token}` } }
+          );
+
+          // Update job status based on the *final* status from the upload endpoint response
+          // We fetch the full status again to ensure consistency
+          fetchJobStatus(jobId);
+
+          toast.success(response.data.message || "Model uploaded and registered successfully!");
+
+      } catch (error: unknown) {
+          console.error("Upload error:", error);
+          let detail = "Failed to upload or register model.";
+          if (isAxiosError(error)) {
+              detail = error.response?.data?.detail || error.message;
+          } else if (error instanceof Error) {
+              detail = error.message;
+          }
+          setUploadError(detail);
+          toast.error(`Upload failed: ${detail}`);
+
+          // Update job status to reflect failure (e.g., UPLOAD_FAILED or keep TRAINING_COMPLETE but show error)
+          // Option 1: Fetch status again to see if backend updated it to FAILED/UPLOAD_FAILED
+          fetchJobStatus(jobId);
+          // Option 2: Manually set a message on the current status (might be overwritten by fetch)
+          // setJobStatus(prev => ({ 
+          //     ...(prev || {}), 
+          //     status: 'UPLOAD_FAILED', // Or keep TRAINING_COMPLETE
+          //     message: detail 
+          // }));
+      } finally {
+          setIsUploading(false);
       }
   };
 
@@ -387,68 +462,121 @@ export function TrainModel() {
              <p className="text-sm text-red-600">Error: {submitError}</p>
          )}
 
+         {/* --- Job Status Display Area --- */} 
          <div className="mt-4 p-3 border rounded bg-muted/50 min-h-[100px]">
              <h4 className="text-sm font-medium mb-2">
                  Job Status {jobId ? `(${jobId.substring(0,8)}...)` : ""}
              </h4>
              {jobId ? (
+                 // Use React Fragment to group multiple elements conditionally
                  <> 
-                 {isPolling && !jobStatus && ( 
-                    <div className="flex items-center text-sm text-muted-foreground">
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Polling for initial status...
-                    </div>
-                 )}
-                 {jobStatus && (
-                    <div className="space-y-1">
-                        <div className="flex items-center text-sm">
-                             Status: 
-                             <Badge variant={getStatusVariant(jobStatus.status)} className="ml-2"> 
-                                 {jobStatus.status}
-                             </Badge>
-                             {isPolling && <Loader2 className="ml-2 h-3 w-3 animate-spin text-muted-foreground" />} 
-                        </div>
-                        {jobStatus.message && jobStatus.status !== 'COMPLETED' && (
-                            <p className={`text-xs ${jobStatus.status === 'FAILED' || jobStatus.status === 'ERROR' ? 'text-red-600' : 'text-muted-foreground'}`}>
-                                {jobStatus.message}
-                            </p>
-                        )}
-                        {jobStatus.status === 'COMPLETED' && (
-                            <div className="text-xs mt-1 space-y-0.5 pt-1 border-t border-dashed">
-                                <p><strong>Model CID:</strong> {jobStatus.model_cid || 'N/A'}</p>
-                                <p><strong>Info CID:</strong> {jobStatus.model_info_cid || 'N/A'}</p>
-                                <p><strong>Accuracy:</strong> {jobStatus.accuracy ? jobStatus.accuracy.toFixed(4) : 'N/A'}</p>
-                                <p><strong>FVM Tx:</strong> 
-                                    {jobStatus.fvm_tx_hash ? (
-                                        <a href={`${filecoinExplorerTx}${jobStatus.fvm_tx_hash}`} target="_blank" rel="noopener noreferrer" title={jobStatus.fvm_tx_hash} className="inline-flex items-center gap-1 hover:underline text-blue-600">
-                                            {`${jobStatus.fvm_tx_hash.substring(0,10)}...${jobStatus.fvm_tx_hash.substring(jobStatus.fvm_tx_hash.length - 8)}`}
-                                            <ExternalLink className="h-3 w-3" />
-                                        </a>
-                                    ) : (
-                                        'N/A'
-                                    )}
-                                </p>
-                            </div>
-                        )}
-                    </div>
-                 )}
-                 {statusError && (!jobStatus || (jobStatus.status !== 'FAILED' && jobStatus.status !== 'ERROR')) && (
-                      <p className="text-sm text-red-600 mt-2">Status Update Error: {statusError}</p>
-                 )}
-                 </>
+                     {isPolling && !jobStatus && ( 
+                         <div className="flex items-center text-sm text-muted-foreground">
+                             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Polling for initial status...
+                         </div>
+                     )}
+                     {jobStatus && (
+                         // Display primary status line regardless of detailed status
+                         <div className="space-y-1 mb-2">
+                             <div className="flex items-center text-sm">
+                                 Status: 
+                                 <Badge variant={getStatusVariant(jobStatus.status)} className="ml-2"> 
+                                     {jobStatus.status}
+                                 </Badge>
+                                 {isPolling && <Loader2 className="ml-2 h-3 w-3 animate-spin text-muted-foreground" />} 
+                             </div>
+                             {/* Display general messages unless completed/ready for upload */}
+                             {jobStatus.message && jobStatus.status !== 'COMPLETED' && jobStatus.status !== 'TRAINING_COMPLETE' && (
+                                 <p className={`text-xs ${jobStatus.status === 'FAILED' || jobStatus.status === 'ERROR' || jobStatus.status === 'UPLOAD_FAILED' ? 'text-red-600' : 'text-muted-foreground'}`}>
+                                     {jobStatus.message}
+                                 </p>
+                             )}
+                         </div>
+                     )}
+
+                     {/* --- Conditionally Render Upload Section --- */} 
+                     {jobStatus && jobStatus.status === 'TRAINING_COMPLETE' && (
+                         <div className="mt-3 pt-3 border-t border-dashed space-y-3">
+                             <p className="text-sm font-medium text-green-700 dark:text-green-400">Training complete. Ready to upload and register.</p>
+                             {/* Model Name Input */} 
+                             <div className="space-y-1.5">
+                                 <Label htmlFor="model-name">Model Name (Optional)</Label>
+                                 <Input
+                                     id="model-name"
+                                     placeholder="Give your trained model a name..."
+                                     value={modelName}
+                                     onChange={(e) => { setModelName(e.target.value); setUploadError(null); }}
+                                     disabled={isUploading}
+                                 />
+                             </div>
+                             {/* Upload Error Display */} 
+                             {uploadError && (
+                                 <p className="text-sm text-red-600">Upload Error: {uploadError}</p>
+                             )}
+                             {/* Upload Button */} 
+                             <Button
+                                 onClick={handleUploadModel}
+                                 disabled={isUploading || jobStatus.status !== 'TRAINING_COMPLETE'}
+                                 size="sm"
+                             >
+                                 {isUploading ? (
+                                     <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Uploading...</>
+                                 ) : (
+                                     'Upload & Register Model'
+                                 )}
+                             </Button>
+                         </div>
+                     )}
+
+                     {/* --- Display Final Results only on COMPLETED --- */} 
+                     {jobStatus && jobStatus.status === 'COMPLETED' && (
+                         <div className="text-xs mt-2 space-y-0.5 pt-2 border-t border-dashed">
+                             <p><strong>Model CID:</strong> {jobStatus.model_cid || 'N/A'}</p>
+                             <p><strong>Info CID:</strong> {jobStatus.model_info_cid || 'N/A'}</p>
+                             <p><strong>Accuracy:</strong> {jobStatus.accuracy ? jobStatus.accuracy.toFixed(4) : 'N/A'}</p>
+                             <p><strong>FVM Tx:</strong> 
+                                 {jobStatus.fvm_tx_hash ? (
+                                     <a href={`${filecoinExplorerTx}${jobStatus.fvm_tx_hash}`} target="_blank" rel="noopener noreferrer" title={jobStatus.fvm_tx_hash} className="inline-flex items-center gap-1 hover:underline text-blue-600 dark:text-blue-400">
+                                         {`${jobStatus.fvm_tx_hash.substring(0,10)}...${jobStatus.fvm_tx_hash.substring(jobStatus.fvm_tx_hash.length - 8)}`}
+                                         <ExternalLink className="h-3 w-3" />
+                                     </a>
+                                 ) : (
+                                     'N/A'
+                                 )}
+                             </p>
+                         </div>
+                     )}
+
+                    {/* Display Status Update Error if applicable */}
+                     {statusError && (!jobStatus || (jobStatus.status !== 'FAILED' && jobStatus.status !== 'ERROR' && jobStatus.status !== 'UPLOAD_FAILED')) && (
+                         <p className="text-sm text-red-600 mt-2">Status Update Error: {statusError}</p>
+                     )}
+                 </> // End React Fragment for conditional jobId content
              ) : (
+                 // Message when no job is active
                  <p className="text-sm text-muted-foreground">No active training job.</p>
              )}
          </div>
       </CardContent>
+      {/* --- Card Footer --- */} 
       <CardFooter>
         <Button 
             onClick={handleStartTraining} 
-            disabled={!datasetCid || !modelType || !targetColumn || isSubmitting || isPolling}
+            // Disable start button if:
+            // - No CID/ModelType/TargetColumn
+            // - Submitting new job
+            // - Polling for status (job running)
+            // - Training is complete but not yet uploaded
+            // - Uploading is in progress
+            disabled={!datasetCid || !modelType || !targetColumn || isSubmitting || isPolling || (jobStatus?.status === 'TRAINING_COMPLETE') || isUploading}
         >
           {isSubmitting ? (
               <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Submitting...</>
           ) : (
-              isPolling ? 'Training Active...' : 'Start Training' 
+              isPolling ? 'Training Active...' : 
+              jobStatus?.status === 'TRAINING_COMPLETE' ? 'Training Complete' : // Indicate completion if button is visible but disabled
+              isUploading ? 'Uploading Model...' : // Indicate upload in progress
+              'Start Training' // Default text
           )}
         </Button>
       </CardFooter>
