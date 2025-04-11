@@ -9,21 +9,24 @@ import os
 import json
 import logging
 import tempfile
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
 def train_model_on_dataset(
     dataset_path: str,
+    output_dir: str,
     model_type: str,
     target_column: str,
     hyperparameters: Dict[str, Any]
 ) -> Tuple[Any, Dict[str, Any], str, str] | Tuple[None, None, None, None]:
     """
     Trains a specified ML model on the dataset using provided parameters.
+    Saves the trained model (.joblib) and metadata (.json) to the specified output directory.
 
     Args:
         dataset_path: The file path to the dataset (e.g., CSV).
+        output_dir: The directory path where the model and info files will be saved.
         model_type: String identifier for the model (e.g., "RandomForest", "XGBoost").
         target_column: The name of the column to predict.
         hyperparameters: Dictionary of hyperparameters for the model.
@@ -133,19 +136,21 @@ def train_model_on_dataset(
             # "dataset_source_path": dataset_path 
         }
 
-        # --- Save model and info --- 
-        temp_dir = tempfile.mkdtemp()
+        # --- Save model and info to the specified output directory --- 
+        os.makedirs(output_dir, exist_ok=True) # Ensure the output directory exists
         model_filename = "trained_model.joblib"
         info_filename = "model_info.json"
-        model_path = os.path.join(temp_dir, model_filename)
-        info_path = os.path.join(temp_dir, info_filename)
+
+        # Construct full paths within the output directory
+        model_path = os.path.join(output_dir, model_filename)
+        info_path = os.path.join(output_dir, info_filename)
 
         joblib.dump(model, model_path)
         with open(info_path, 'w') as f:
             json.dump(model_info, f, indent=2)
 
-        logger.info(f"Model saved to temporary path: {model_path}")
-        logger.info(f"Model info saved to temporary path: {info_path}")
+        logger.info(f"Model saved to: {model_path}")
+        logger.info(f"Model info saved to: {info_path}")
 
         return model, model_info, model_path, info_path
 
@@ -159,7 +164,11 @@ def train_model_on_dataset(
         logger.error(f"An error occurred during model training: {e}", exc_info=True)
         return None, None, None, None
 
-def predict_with_model(model: Any, model_info: Dict[str, Any], input_data: Dict[str, Any]) -> Dict[str, Any] | None:
+def predict_with_model(
+    model: Any,
+    model_info: Dict[str, Any],
+    input_data: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
     """
     Makes a prediction using the loaded model and input data.
 

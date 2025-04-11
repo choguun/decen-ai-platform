@@ -6,7 +6,7 @@ import logging # Add logging config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Import routers
-from .routers import data, training, inference, auth, provenance # Add provenance
+from .routers import data, training, inference, auth, provenance, models # Add models router
 
 app = FastAPI(
     title="Decentralized AI Platform Backend",
@@ -37,6 +37,7 @@ app.include_router(data.router)
 app.include_router(training.router) # Include training router
 app.include_router(inference.router) # Include inference router
 app.include_router(provenance.router) # Include provenance router
+app.include_router(models.router) # Include the new models router
 
 
 @app.get("/", tags=["Health Check"])
@@ -60,4 +61,4 @@ def read_root():
 # --- Server Startup (for local development) ---
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) # Use reload for development 

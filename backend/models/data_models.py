@@ -33,17 +33,20 @@ class TrainResponse(BaseModel):
 # Add model for status reporting
 class TrainingStatusResponse(BaseModel):
     job_id: str
-    status: str = Field(..., description="Current status (e.g., PENDING, DOWNLOADING, TRAINING, UPLOADING, REGISTERING, COMPLETED, FAILED)")
+    status: str = Field(..., description="Current status (e.g., PENDING, DOWNLOADING, TRAINING, TRAINING_COMPLETE, UPLOADING, REGISTERING, COMPLETED, FAILED)")
     message: Optional[str] = Field(None, description="Optional message, e.g., error details.")
     dataset_cid: str
     owner_address: str
-    # Results available when status is COMPLETED
+    # Results available when status is TRAINING_COMPLETE or COMPLETED
     model_cid: Optional[str] = None
     model_info_cid: Optional[str] = None
     accuracy: Optional[float] = None
     fvm_tx_hash: Optional[str] = None
-    created_at: Optional[datetime] = None # Use datetime if importing
-    updated_at: Optional[datetime] = None # Use datetime if importing
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    # --- Add fields to store temporary results --- 
+    temp_model_path: Optional[str] = None # Store path to .joblib file
+    temp_info_path: Optional[str] = None # Store path to .json file
 
 class InferenceRequest(BaseModel):
     model_cid: str = Field(..., description="CID of the trained model (.joblib) to use for inference.")
@@ -58,3 +61,13 @@ class InferenceResponse(BaseModel):
     model_cid: str
     # Optional: include input_data in response? Can be large.
     # input_data: Dict[str, Any] 
+
+# --- Models for the new Upload endpoint --- 
+class UploadTrainedModelRequest(BaseModel):
+    model_name: Optional[str] = Field(None, description="Optional name to use for the model registration.")
+
+class UploadTrainedModelResponse(BaseModel):
+    model_cid: str
+    model_info_cid: str
+    fvm_tx_hash: Optional[str] = None # FVM hash might be None if registration fails
+    message: str = "Model uploaded and provenance registered successfully." 
