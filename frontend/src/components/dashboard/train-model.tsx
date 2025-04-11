@@ -12,9 +12,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { getAuthToken } from "@/components/auth/connect-wallet-button";
 import { Loader2, ExternalLink } from 'lucide-react';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000';
 const filecoinExplorerTx = 'https://calibration.filscan.io/en/message/';
+const lighthouseGateway = 'https://gateway.lighthouse.storage/ipfs/';
 
 // --- Type Definition ---
 interface TrainingStatus {
@@ -31,6 +34,12 @@ interface TrainingStatus {
   updated_at?: string;
 }
 
+// Type for preview data
+interface PreviewData {
+    headers: string[];
+    rows: string[][];
+}
+
 export function TrainModel() {
   const [datasetCid, setDatasetCid] = useState("");
   const [modelType, setModelType] = useState<string>("");
@@ -43,6 +52,9 @@ export function TrainModel() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<PreviewData | null>(null);
 
   // Function to fetch job status
   const fetchJobStatus = async (currentJobId: string) => {
@@ -106,6 +118,53 @@ export function TrainModel() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, isPolling]);
+
+  // --- Function to handle Dataset Preview --- 
+  const handlePreviewDataset = async () => {
+      if (!datasetCid) {
+          toast.error("Please enter a Dataset CID first.");
+          return;
+      }
+      
+      setIsPreviewLoading(true);
+      setPreviewError(null);
+      setPreviewData(null);
+      
+      const gatewayUrl = `${lighthouseGateway}${datasetCid}`;
+      
+      try {
+          const response = await fetch(gatewayUrl);
+          if (!response.ok) {
+              throw new Error(`Failed to fetch from gateway: ${response.status} ${response.statusText}`);
+          }
+          const csvText = await response.text();
+          
+          // Basic CSV Parsing (can be improved for edge cases like quoted commas)
+          const lines = csvText.trim().split('\n');
+          if (lines.length === 0) {
+              setPreviewData({ headers: [], rows: [] });
+              setIsPreviewLoading(false);
+              return;
+          }
+          
+          const headers = lines[0].split(',').map(h => h.trim());
+          const rows = lines.slice(1).map(line => line.split(',').map(cell => cell.trim()));
+          
+          setPreviewData({ headers, rows });
+          toast.success("Dataset preview loaded.");
+          
+      } catch (error: unknown) {
+           console.error("Dataset preview error:", error);
+           let detail = "Failed to load dataset preview."
+           if (error instanceof Error) {
+               detail = error.message;
+           }
+           setPreviewError(detail);
+           toast.error(detail);
+      } finally {
+           setIsPreviewLoading(false);
+      }
+  };
 
   const handleStartTraining = async () => {
     if (!datasetCid) {
@@ -217,13 +276,29 @@ export function TrainModel() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1.5">
                 <Label htmlFor="dataset-cid-train">Dataset CID</Label>
-                <Input
-                    id="dataset-cid-train"
-                    placeholder="Enter dataset CID..."
-                    value={datasetCid}
-                    onChange={(e) => { setDatasetCid(e.target.value); setSubmitError(null); }}
-                    disabled={isSubmitting || isPolling}
-                />
+                <div className="flex space-x-2">
+                    <Input
+                        id="dataset-cid-train"
+                        placeholder="Enter dataset CID..."
+                        value={datasetCid}
+                        onChange={(e) => { 
+                            setDatasetCid(e.target.value); 
+                            setSubmitError(null); 
+                            setPreviewData(null); // Clear preview if CID changes
+                            setPreviewError(null);
+                        }}
+                        disabled={isSubmitting || isPolling || isPreviewLoading}
+                    />
+                    <Button 
+                        variant="outline" 
+                        size="icon" 
+                        onClick={handlePreviewDataset} 
+                        disabled={!datasetCid || isPreviewLoading || isSubmitting || isPolling}
+                        title="Preview Dataset"
+                    >
+                         {isPreviewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "👁️"} 
+                    </Button>
+                 </div>
             </div>
 
             <div className="space-y-1.5">
@@ -270,6 +345,43 @@ export function TrainModel() {
                 </p>
             </div>
         </div>
+
+         {previewError && (
+            <div className="mt-2 p-3 border rounded bg-destructive/10">
+                 <p className="text-sm text-destructive">Preview Error: {previewError}</p>
+            </div>
+         )}
+         {previewData && (
+            <div className="mt-2">
+                 <h5 className="text-sm font-medium mb-1">Dataset Preview (First 10 Rows)</h5>
+                 <ScrollArea className="h-[200px] border rounded">
+                     <Table className="table-fixed w-full">
+                        <TableHeader>
+                            <TableRow>
+                                {previewData.headers.map((header, index) => (
+                                    <TableHead key={index} className="whitespace-nowrap px-2 py-1 truncate">{header}</TableHead>
+                                ))}
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {previewData.rows.slice(0, 10).map((row, rowIndex) => (
+                                <TableRow key={rowIndex}>
+                                    {row.map((cell, cellIndex) => (
+                                        <TableCell key={cellIndex} className="whitespace-nowrap px-2 py-1 truncate" title={cell}>{cell}</TableCell>
+                                    ))}
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                     </Table>
+                 </ScrollArea>
+             </div>
+         )}
+         {isPreviewLoading && !previewError && (
+             <div className="mt-2 p-3 border rounded bg-muted/50 flex items-center justify-center min-h-[50px]">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-muted-foreground text-sm">Loading preview...</span>
+             </div>
+         )}
 
          {submitError && (
              <p className="text-sm text-red-600">Error: {submitError}</p>
