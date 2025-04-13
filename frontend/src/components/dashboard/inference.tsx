@@ -19,6 +19,22 @@ const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:
 const contractAddress = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as `0x${string}` | undefined;
 const filecoinCalibrationChainId = 314159;
 
+// Interface for combined model details
+interface ModelDetails {
+    name?: string;
+    assetType?: string;
+    owner?: string;
+    filecoinCid?: string;
+    timestamp?: number;
+    metadataCid?: string | null;
+    accuracy?: number | null;
+    target_column?: string | null;
+    features?: string[] | null;
+    hyperparameters_used?: Record<string, any> | null;
+    model_type?: string | null;
+    metadataError?: string;
+}
+
 export function Inference() {
   const [modelCid, setModelCid] = useState("");
   const [sampleData, setSampleData] = useState(""); // Store as JSON string
@@ -31,6 +47,11 @@ export function Inference() {
   const [paymentTxHash, setPaymentTxHash] = useState<`0x${string}` | undefined>(undefined);
   const [isPaying, setIsPaying] = useState(false);
   const [isConfirmingPayment, setIsConfirmingPayment] = useState(false);
+
+  // --- Model Details State --- 
+  const [modelDetails, setModelDetails] = useState<ModelDetails | null>(null);
+  const [isDetailsLoading, setIsDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
 
   const { address, chain } = useAccount();
 
@@ -180,6 +201,39 @@ export function Inference() {
     }
   };
 
+  // --- Function to fetch model details --- 
+  const handleFetchDetails = async () => {
+      if (!modelCid) {
+          toast.error("Please enter a Model CID first.");
+          return;
+      }
+      setIsDetailsLoading(true);
+      setDetailsError(null);
+      setModelDetails(null); // Clear previous details
+      
+      try {
+          const response = await axios.get(`${backendUrl}/models/${modelCid}/details`);
+          setModelDetails(response.data);
+          if (response.data.metadataError) {
+              toast.warning(`Fetched details, but metadata issue: ${response.data.metadataError}`);
+          } else {
+              toast.success("Model details loaded.");
+          }
+      } catch (error: unknown) {
+          console.error("Fetch model details error:", error);
+          let detail = "Failed to fetch model details.";
+          if (isAxiosError(error)) {
+              detail = error.response?.data?.detail || error.message;
+          } else if (error instanceof Error) {
+              detail = error.message;
+          }
+          setDetailsError(detail);
+          toast.error(detail);
+      } finally {
+          setIsDetailsLoading(false);
+      }
+  };
+
   useEffect(() => {
     if (fetchedFee !== undefined && fetchedFee !== null) {
       setServiceFee(fetchedFee as bigint);
@@ -217,13 +271,24 @@ export function Inference() {
       <CardContent className="space-y-4">
         <div className="grid w-full max-w-sm items-center gap-1.5">
           <Label htmlFor="model-cid-inference">Model CID</Label>
-          <Input
-            id="model-cid-inference"
-            placeholder="Enter model CID..."
-            value={modelCid}
-            onChange={handleModelCidChange} // Use specific handler
-            disabled={isLoading || isPaying}
-          />
+          <div className="flex space-x-2">
+             <Input
+                id="model-cid-inference"
+                placeholder="Enter model CID..."
+                value={modelCid}
+                onChange={(e) => { handleModelCidChange(e); setModelDetails(null); setDetailsError(null); }} // Clear details on change
+                disabled={isLoading || isPaying || isDetailsLoading}
+             />
+             <Button 
+                 variant="outline" 
+                 size="icon" 
+                 onClick={handleFetchDetails} 
+                 disabled={!modelCid || isLoading || isPaying || isDetailsLoading}
+                 title="View Model Details"
+             >
+                  {isDetailsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "ℹ️"} 
+             </Button>
+          </div>
         </div>
         <div className="grid w-full items-center gap-1.5">
           <Label htmlFor="sample-data">Sample Data (JSON Format)</Label>
@@ -243,6 +308,31 @@ export function Inference() {
         {inferenceError && (
             <p className="text-sm text-red-600">Error: {inferenceError}</p>
         )}
+
+        {/* --- Model Details Display Area --- */}
+        {detailsError && (
+             <div className="mt-4 p-3 border rounded bg-destructive/10">
+                 <p className="text-sm text-destructive">Details Error: {detailsError}</p>
+            </div>
+         )}
+         {modelDetails && (
+            <div className="mt-4 p-3 border rounded bg-blue-100/50 dark:bg-blue-900/20 text-sm space-y-1">
+                 <h4 className="text-sm font-medium mb-1">Model Details</h4>
+                 <p><strong>Name:</strong> {modelDetails.name || "N/A"}</p>
+                 <p><strong>Type:</strong> {modelDetails.model_type || modelDetails.assetType || "N/A"}</p>
+                 <p><strong>Accuracy:</strong> {modelDetails.accuracy !== null && modelDetails.accuracy !== undefined ? modelDetails.accuracy.toFixed(4) : "N/A"}</p>
+                 <p><strong>Target:</strong> {modelDetails.target_column || "N/A"}</p>
+                 <p><strong>Metadata CID:</strong> {modelDetails.metadataCid || "N/A"}</p>
+                 {/* Optionally display more details like features, params, owner, timestamp */} 
+                 {modelDetails.metadataError && <p className="text-orange-600 text-xs mt-1">Note: {modelDetails.metadataError}</p>}
+            </div>
+         )}
+         {isDetailsLoading && (
+            <div className="mt-4 p-3 border rounded bg-muted/50 min-h-[80px] flex items-center justify-center">
+                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                 <span className="ml-2 text-muted-foreground text-sm">Loading details...</span>
+             </div>
+         )}
 
         {/* Display Inference Result/Error Area */} 
         {inferenceOutput !== null && (

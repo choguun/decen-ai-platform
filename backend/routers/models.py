@@ -3,6 +3,10 @@
 import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Dict, Any
+import json
+import tempfile
+import shutil
 
 from .. import job_store
 from ..services import lighthouse_service, fvm_service
@@ -174,4 +178,101 @@ async def upload_and_register_model(
         model_info_cid=model_info_cid or "", # Should always have value if COMPLETED
         fvm_tx_hash=fvm_tx_hash, # Can be None if registration failed
         message=final_message
-    ) 
+    )
+
+# --- New Endpoint to Get Model Details --- 
+@router.get(
+    "/{asset_cid}/details",
+    # Define a response model if desired, or return Dict
+    response_model=Dict[str, Any], 
+    summary="Get Combined Model Details",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "Asset or metadata not found"},
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse, "description": "Server error fetching details"}
+    }
+)
+async def get_model_details(
+    asset_cid: str,
+    # No auth needed for public details? Or add Depends(get_current_active_user)?
+) -> Dict[str, Any]:
+    """
+    Retrieves details for a given asset CID by combining on-chain provenance 
+    data (like name) and off-chain metadata (like accuracy) stored on Lighthouse.
+    """
+    logger.info(f"Fetching details for asset CID: {asset_cid}")
+
+    # 1. Get On-Chain Provenance Record
+    provenance_record = fvm_service.get_provenance_by_cid(asset_cid)
+
+    if not provenance_record:
+        logger.warning(f"No on-chain provenance record found for CID: {asset_cid}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset provenance record not found.")
+
+    logger.debug(f"Found provenance record: {provenance_record}")
+    
+    # Base details from provenance
+    details = {
+        "name": provenance_record.get("name"),
+        "assetType": provenance_record.get("assetType"),
+        "owner": provenance_record.get("owner"),
+        "filecoinCid": provenance_record.get("filecoinCid"),
+        "timestamp": provenance_record.get("timestamp"),
+        # Initialize metadata fields
+        "metadataCid": None,
+        "accuracy": None,
+        "target_column": None,
+        "features": None,
+        "hyperparameters_used": None,
+        # Add other fields from metadata as needed
+    }
+
+    # 2. Get Off-Chain Metadata (if available)
+    metadata_cid = provenance_record.get("metadataCid")
+    if not metadata_cid:
+        logger.info(f"No metadata CID found in provenance for asset {asset_cid}. Returning on-chain details only.")
+        return details # Return only the provenance info
+    
+    details["metadataCid"] = metadata_cid
+    logger.info(f"Attempting to download metadata from CID: {metadata_cid}")
+    
+    temp_dir = None
+    try:
+        temp_dir = tempfile.mkdtemp()
+        metadata_path = os.path.join(temp_dir, f"{metadata_cid}.json")
+
+        if not lighthouse_service.download_file(metadata_cid, metadata_path):
+            logger.warning(f"Failed to download metadata file {metadata_cid} for asset {asset_cid}. Returning partial details.")
+            # Don't raise 404 here, just return what we have
+            return details 
+
+        # Load metadata JSON
+        with open(metadata_path, 'r') as f:
+            metadata_content = json.load(f)
+            logger.debug(f"Successfully loaded metadata content: {metadata_content}")
+            
+            # Merge metadata fields into details dictionary
+            details["accuracy"] = metadata_content.get("accuracy")
+            details["target_column"] = metadata_content.get("target_column")
+            details["features"] = metadata_content.get("features")
+            details["hyperparameters_used"] = metadata_content.get("hyperparameters_used")
+            details["model_type"] = metadata_content.get("model_type") # Add model_type if present
+            # Add any other relevant fields from your model_info.json
+
+    except json.JSONDecodeError as e:
+         logger.error(f"Failed to parse downloaded metadata JSON from {metadata_cid}: {e}")
+         # Return partial details, maybe add an error message?
+         details["metadataError"] = "Failed to parse metadata file."
+         return details 
+    except Exception as e:
+        logger.error(f"Error processing metadata for asset {asset_cid} (metadata CID: {metadata_cid}): {e}", exc_info=True)
+        # Don't raise 500, return partial info with error indicator
+        details["metadataError"] = "Error processing metadata file."
+        return details
+    finally:
+        # Clean up downloaded metadata file
+        if temp_dir and os.path.exists(temp_dir):
+            try: shutil.rmtree(temp_dir)
+            except Exception as e: logger.error(f"Error cleaning up metadata temp dir {temp_dir}: {e}")
+
+    logger.info(f"Successfully combined details for asset CID: {asset_cid}")
+    return details 
