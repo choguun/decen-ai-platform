@@ -12,6 +12,7 @@ from ..services import lighthouse_service, ml_service, fvm_service
 from ..models.data_models import TrainRequest, TrainResponse, ErrorResponse, TrainingStatusResponse
 from ..routers.auth import get_current_active_user
 from .. import job_store # Import the new job store module
+from .. import config # Import config to get service fee
 
 router = APIRouter(
     prefix="/training",
@@ -26,21 +27,49 @@ def run_training_job(
     owner_address: str,
     model_type: str,
     target_column: str,
-    hyperparameters: Dict[str, Any]
+    hyperparameters: Dict[str, Any],
+    payment_tx_hash: str,
+    payment_nonce: str
 ):
-    """Background task to run the training part of the pipeline, updating status."""
-    logger.info(f"Background training job {job_id} started. Dataset: {dataset_cid}, Owner: {owner_address}, Model: {model_type}, Target: {target_column}, Params: {hyperparameters}")
+    """Background task to verify payment, then run the training part of the pipeline."""
+    logger.info(f"Background job {job_id} started. Verifying payment {payment_tx_hash}...")
+    # --- Optional: Update status to indicate verification step --- 
+    job_store.update_job_status(job_id, "VERIFYING_PAYMENT", "Verifying service fee payment...")
+    
     temp_dir = None # We still use a temp dir for the downloaded dataset
     temp_model_path = None # Will hold the path to the saved model in temp_dir
     temp_info_path = None # Will hold the path to the saved info in temp_dir
     accuracy = None
 
     try:
+        # --- 1. Payment Verification --- 
+        expected_fee = config.TRAINING_SERVICE_FEE 
+        if not expected_fee: # Check config again in background task
+             logger.error(f"Job {job_id}: Configuration error: TRAINING_SERVICE_FEE is not set.")
+             job_store.update_job_status(job_id, "FAILED", "Service configuration error.")
+             return
+
+        payment_verified = fvm_service.verify_payment(
+            tx_hash=payment_tx_hash,
+            expected_payer=owner_address, # Use owner_address passed to task
+            expected_amount=expected_fee, 
+            expected_service_type="TRAINING",
+            expected_nonce=payment_nonce
+        )
+
+        if not payment_verified:
+            logger.warning(f"Job {job_id}: Payment verification failed for tx {payment_tx_hash}")
+            job_store.update_job_status(job_id, "FAILED", "Service fee payment verification failed.")
+            return
+        
+        logger.info(f"Job {job_id}: Payment verified successfully.")
+        # --- End Payment Verification --- 
+
         # Create a temporary directory for the job
         temp_dir = tempfile.mkdtemp()
         logger.info(f"Created temporary directory for training job {job_id}: {temp_dir}")
 
-        # 1. Download dataset into the job's temp directory
+        # 2. Download dataset into the job's temp directory
         job_store.update_job_status(job_id, "DOWNLOADING")
         downloaded_dataset_path = os.path.join(temp_dir, f"{dataset_cid}_dataset.csv")
         if not lighthouse_service.download_file(dataset_cid, downloaded_dataset_path):
@@ -48,7 +77,7 @@ def run_training_job(
             job_store.update_job_status(job_id, "FAILED", "Failed to download dataset from storage.")
             return
 
-        # 2. Train model, saving outputs into the same job temp directory
+        # 3. Train model, saving outputs into the same job temp directory
         job_store.update_job_status(job_id, "TRAINING")
         model, model_info, saved_model_path, saved_info_path = ml_service.train_model_on_dataset(
             dataset_path=downloaded_dataset_path,
@@ -78,7 +107,7 @@ def run_training_job(
         with open(temp_info_path, 'w') as f:
             json.dump(model_info, f, indent=2)
 
-        # 3. Mark Training as Complete (Upload & Registration done separately)
+        # 4. Mark Training as Complete (Upload & Registration done separately)
         job_store.update_job_status(
             job_id, 
             "TRAINING_COMPLETE",
@@ -122,7 +151,8 @@ def run_training_job(
     responses={ # Add 401
         status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
-        status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse}
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse},
+        status.HTTP_402_PAYMENT_REQUIRED: {"model": ErrorResponse, "description": "Payment verification failed"},
     }
 )
 async def start_training(
@@ -132,13 +162,16 @@ async def start_training(
 ):
     """
     Initiates a model training job in the background for the authenticated user.
+    Payment verification happens asynchronously within the background task.
     Requires JWT authentication.
 
     Takes a dataset CID, downloads the data, trains a model,
-    uploads the model and metadata to Lighthouse, and registers provenance on FVM.
+    saves the model/metadata locally, and sets status to TRAINING_COMPLETE.
     This endpoint returns immediately after starting the background task.
 
     - **dataset_cid**: CID of the dataset to train on.
+    - **paymentTxHash**: Transaction hash of the service fee payment.
+    - **paymentNonce**: Unique nonce associated with the payment transaction.
     """
     logger.info(f"User {current_user_address} requesting training. Payload: {train_request.dict()}")
 
@@ -166,7 +199,10 @@ async def start_training(
         owner_address=current_user_address,
         model_type=train_request.model_type,
         target_column=train_request.target_column,
-        hyperparameters=train_request.hyperparameters
+        hyperparameters=train_request.hyperparameters,
+        # --- Pass payment details to background task --- 
+        payment_tx_hash=train_request.paymentTxHash,
+        payment_nonce=train_request.paymentNonce
     )
 
     # Return job ID in the initial response

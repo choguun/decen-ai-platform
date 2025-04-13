@@ -16,6 +16,20 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 30))
 
+# --- Service Fees (in Wei) --- 
+# Load as string and convert to int, defaulting to 0 if not set or invalid
+try:
+    TRAINING_SERVICE_FEE = int(os.getenv("TRAINING_SERVICE_FEE", "0"))
+except ValueError:
+    print("Warning: Invalid TRAINING_SERVICE_FEE in .env file. Defaulting to 0.")
+    TRAINING_SERVICE_FEE = 0
+
+try:
+    INFERENCE_SERVICE_FEE = int(os.getenv("INFERENCE_SERVICE_FEE", "0"))
+except ValueError:
+    print("Warning: Invalid INFERENCE_SERVICE_FEE in .env file. Defaulting to 0.")
+    INFERENCE_SERVICE_FEE = 0
+
 # Basic validation
 if not LIGHTHOUSE_API_KEY:
     print("Warning: LIGHTHOUSE_API_KEY not found in .env file.")

@@ -198,6 +198,115 @@ def register_asset_provenance(
              logger.error(f"An unexpected error occurred during provenance registration: {e}", exc_info=True)
         return None
 
+# --- Function to verify service payment via event logs ---
+def verify_payment(
+    tx_hash: str, 
+    expected_payer: str, 
+    expected_amount: int, # Assuming fee is int (wei) 
+    expected_service_type: str, 
+    expected_nonce: str
+) -> bool:
+    """
+    Verifies a payment transaction by checking its receipt and emitted PaymentReceived event.
+
+    Args:
+        tx_hash: The transaction hash of the payment.
+        expected_payer: The address expected to have made the payment.
+        expected_amount: The exact amount (in wei) expected.
+        expected_service_type: The service type string expected (e.g., "TRAINING").
+        expected_nonce: The unique nonce expected for this payment.
+
+    Returns:
+        True if the payment is verified, False otherwise.
+    """
+    logger.info(f"Verifying payment for Tx: {tx_hash}, Payer: {expected_payer}, Amount: {expected_amount}, Service: {expected_service_type}, Nonce: {expected_nonce}")
+
+    if not w3 or not w3.is_connected() or not contract or not CONTRACT_ABI:
+        logger.error("Cannot verify payment: Web3 client or contract not initialized.")
+        return False
+
+    try:
+        # 1. Get Transaction Receipt
+        tx_receipt = w3.eth.get_transaction_receipt(tx_hash)
+
+        # Log receipt details for debugging
+        if tx_receipt:
+            logger.debug(f"Tx {tx_hash} Receipt Found: Status={tx_receipt.status}, From={tx_receipt['from']}, To={tx_receipt.to}, Block={tx_receipt.blockNumber}")
+        else:
+            logger.warning(f"Tx {tx_hash} Receipt Not Found.")
+
+        if not tx_receipt:
+            logger.warning(f"Payment verification failed: Transaction receipt not found for hash {tx_hash}.")
+            return False
+
+        # 2. Check Receipt Status
+        if tx_receipt.status != 1:
+            logger.warning(f"Payment verification failed: Transaction {tx_hash} failed (status code {tx_receipt.status}).")
+            return False
+
+        logger.debug(f"Tx {tx_hash}: Status OK (1).")
+
+        # 3. Check Recipient (should be the contract itself)
+        if tx_receipt.to.lower() != config.CONTRACT_ADDRESS.lower():
+            logger.warning(f"Payment verification failed: Tx {tx_hash} recipient ({tx_receipt.to}) does not match contract address ({config.CONTRACT_ADDRESS}).")
+            return False
+
+        logger.debug(f"Tx {tx_hash}: Recipient OK ({tx_receipt.to}).")
+            
+        # 4. Check Payer Address
+        if tx_receipt['from'].lower() != expected_payer.lower():
+            logger.warning(f"Payment verification failed: Tx {tx_hash} payer ({tx_receipt['from']}) does not match expected payer ({expected_payer}).")
+            return False
+
+        logger.debug(f"Tx {tx_hash}: Payer OK ({tx_receipt['from']}).")
+
+        # 5. Decode Event Logs for PaymentReceived
+        # Use the contract object's event processing capability
+        try:
+            logs = contract.events.PaymentReceived().process_receipt(tx_receipt)
+        except Exception as log_err: # Catch potential issues during log processing
+            logger.error(f"Error processing PaymentReceived event logs for tx {tx_hash}: {log_err}", exc_info=True)
+            return False
+
+        if not logs:
+            logger.warning(f"Payment verification failed: No PaymentReceived event found in logs for transaction {tx_hash}.")
+            return False
+
+        # 6. Check Event Details (assuming only one relevant event per tx)
+        # Iterate through logs, although typically there's one primary event from our call
+        payment_verified = False
+        for log in logs:
+            event_args = log['args']
+            logger.debug(f"Found PaymentReceived event: Payer={event_args.payer}, Amount={event_args.amountPaid}, Service={event_args.serviceType}, Nonce={event_args.paymentNonce}")
+
+            # Perform checks against expected values
+            payer_match = event_args.payer.lower() == expected_payer.lower()
+            amount_match = event_args.amountPaid == expected_amount
+            service_match = event_args.serviceType == expected_service_type
+            nonce_match = event_args.paymentNonce == expected_nonce
+
+            logger.debug(f"Tx {tx_hash} Event Check: PayerMatch={payer_match}, AmountMatch={amount_match} (Expected={expected_amount}, Got={event_args.amountPaid}), ServiceMatch={service_match}, NonceMatch={nonce_match}")
+
+            if payer_match and amount_match and service_match and nonce_match:
+                payment_verified = True
+                logger.info(f"Payment verified successfully for Tx {tx_hash} with matching event.")
+                break # Found a matching event, no need to check further
+            else:
+                 logger.warning(f"Payment verification failed: Event details mismatch for Tx {tx_hash}. Expected: Payer={expected_payer}, Amount={expected_amount}, Service={expected_service_type}, Nonce={expected_nonce}. Found: {event_args}")
+
+        if not payment_verified:
+            logger.warning(f"Payment verification failed: No matching PaymentReceived event found for Tx {tx_hash} with expected details.")
+            return False
+            
+        # If all checks pass
+        return True
+
+    except TransactionNotFound:
+        logger.warning(f"Payment verification failed: Transaction {tx_hash} not found.")
+        return False
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during payment verification for tx {tx_hash}: {e}", exc_info=True)
+        return False
 
 def get_provenance_by_cid(cid: str) -> Dict[str, Any] | None:
     """Queries provenance by a specific CID from the FVM contract."""

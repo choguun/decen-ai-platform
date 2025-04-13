@@ -16,6 +16,9 @@ class TrainRequest(BaseModel):
     model_type: str = Field(..., description="Type of the ML model to train (e.g., RandomForest, XGBoost).")
     target_column: str = Field(..., description="Name of the target variable column in the dataset.")
     hyperparameters: Dict[str, Any] = Field({}, description="Hyperparameters for the model as a JSON object.") # Default to empty dict
+    # --- Payment Fields --- 
+    paymentTxHash: str = Field(..., description="Transaction hash of the service fee payment.")
+    paymentNonce: str = Field(..., description="Unique nonce associated with the payment transaction.")
     # Add other potential training parameters here later if needed
     # e.g., model_type: str = "RandomForestClassifier"
     # e.g., hyperparameters: Dict[str, Any] = None
@@ -29,6 +32,9 @@ class TrainResponse(BaseModel):
     # model_info_cid: str = Field(..., description="CID of the model metadata file (.json)")
     # accuracy: Optional[float] = Field(None, description="Accuracy achieved on the test set during training.")
     # fvm_tx_hash: Optional[str] = Field(None, description="Transaction hash for provenance registration on FVM.")
+    # --- Payment Fields --- 
+    # paymentTxHash: str = Field(..., description="Transaction hash of the service fee payment.")
+    # paymentNonce: str = Field(..., description="Unique nonce associated with the payment transaction.")
 
 # Add model for status reporting
 class TrainingStatusResponse(BaseModel):
@@ -54,6 +60,9 @@ class InferenceRequest(BaseModel):
     input_data: Dict[str, Any] = Field(..., description="Input features for prediction as a key-value map.")
     # Optional: CID for model info if needed and not implicitly linked
     model_info_cid: Optional[str] = Field(None, description="Optional CID of the model metadata file (.json). Required if features aren't stored with model.")
+    # --- Payment Fields --- 
+    paymentTxHash: str = Field(..., description="Transaction hash of the service fee payment.")
+    paymentNonce: str = Field(..., description="Unique nonce associated with the payment transaction.")
 
 class InferenceResponse(BaseModel):
     prediction: Any = Field(..., description="The prediction result from the model.")
@@ -61,6 +70,9 @@ class InferenceResponse(BaseModel):
     model_cid: str
     # Optional: include input_data in response? Can be large.
     # input_data: Dict[str, Any] 
+    # --- Payment Fields --- 
+    paymentTxHash: str = Field(..., description="Transaction hash of the service fee payment.")
+    paymentNonce: str = Field(..., description="Unique nonce associated with the payment transaction.")
 
 # --- Models for the new Upload endpoint --- 
 class UploadTrainedModelRequest(BaseModel):
