@@ -10,7 +10,7 @@
 
 **Quick Links:**
 *   [Live Demo](#live-demo) <!-- Update with actual link -->
-*   [Video Demo](#video-demo) <!-- Update with actual link -->
+*   [Video Demo](#https://www.loom.com/share/49c902b61b2f44edb44da1fefd3413af?sid=94f2c838-f1f7-4a94-a4a3-6f8fc1fc2e83) <!-- Update with actual link -->
 *   [Slide Deck](#presentation) <!-- Update with actual link -->
 
 ---
@@ -82,7 +82,6 @@ This combination "hacks" the traditional AI data layer by introducing cryptograp
 **1. Clone Repository:**
    ```bash
    git clone <your-repo-url>
-   cd VeriFAI # Or your repo name
    ```
 
 **2. Backend Setup:**
@@ -99,23 +98,15 @@ This combination "hacks" the traditional AI data layer by introducing cryptograp
 **3. Frontend Setup:**
    ```bash
    cd frontend
-   npm install # or yarn install
-   # Create and configure .env.local (see frontend/README.md for details)
-   # **Crucially, set:** NEXT_PUBLIC_BACKEND_API_URL (e.g., http://localhost:8000)
-   cd ..
+   pnpm install # or yarn install
    ```
 
-**4. (If necessary) Deploy Smart Contract:**
-   *(Add instructions from contracts/README.md if judges need to deploy it themselves, otherwise just state the deployed address)*
+**4. Deploy Smart Contract:**
    ```bash
-   # Example using Hardhat
    cd contracts
-   npm install
-   npx hardhat compile
-   # Configure hardhat.config.js with Calibration RPC and deployer private key
-   npx hardhat run scripts/deploy.js --network calibration
-   # **Copy the deployed contract address to backend/.env**
-   cd ..
+   forge install
+   forge compile
+   forge script script/DeployProvenanceLedger.s.sol:DeployProvenanceLedger --rpc-url https://rpc.ankr.com/filecoin_testnet --broadcast --skip-simulation
    ```
 
 **5. Run the Application:**
@@ -127,7 +118,7 @@ This combination "hacks" the traditional AI data layer by introducing cryptograp
    *   **Terminal 2 (Project Root):** Run Frontend
       ```bash
       cd frontend
-      npm run dev # or yarn dev
+      pnpm run dev # or yarn dev
       ```
    *   Access the frontend at `http://localhost:3000` (or the specified port).
 
