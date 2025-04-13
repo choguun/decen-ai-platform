@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "forge-std/Test.sol"; // Standard Foundry import
+// Remove Test import if not actually a test file
+// import "forge-std/Test.sol"; // Standard Foundry import
 import "@openzeppelin/contracts/access/Ownable.sol"; // Import Ownable
 
 /**
@@ -37,6 +38,9 @@ contract ProvenanceLedger is Ownable {
     // Mapping from an owner address to a list of CIDs they have registered
     mapping(address => string[]) public cidsByOwner;
 
+    // Fee required for certain services (e.g., training, inference)
+    uint256 public serviceFee = 100000000000000;
+
     // Optional: To easily check if a CID string has already been registered
     mapping(string => bool) public cidRegistered;
 
@@ -50,6 +54,13 @@ contract ProvenanceLedger is Ownable {
         string name,
         string assetType,
         string filecoinCid
+    );
+
+    event PaymentReceived(
+        address indexed payer,
+        uint256 amountPaid,
+        string serviceType,     // e.g., "TRAINING", "INFERENCE"
+        string paymentNonce     // Unique identifier provided by payer
     );
 
     // ==================
@@ -128,5 +139,49 @@ contract ProvenanceLedger is Ownable {
      */
     function getAssetsByOwner(address owner) public view returns (string[] memory) {
         return cidsByOwner[owner];
+    }
+
+    // ===========================
+    // Fee and Payment Functions
+    // ===========================
+
+    /**
+     * @notice Sets the required fee for payable services.
+     * @dev Only callable by the contract owner.
+     * @param _newFee The new service fee in wei.
+     */
+    function setServiceFee(uint256 _newFee) public onlyOwner {
+        serviceFee = _newFee;
+    }
+
+    /**
+     * @notice Allows a user to pay the required service fee.
+     * @dev Requires sending the exact `serviceFee` amount.
+     * @param _serviceType Identifier for the service being paid for (e.g., "TRAINING").
+     * @param _paymentNonce A unique identifier for this specific payment attempt (provided by frontend).
+     */
+    function payForService(
+        string memory _serviceType, 
+        string memory _paymentNonce
+    ) public payable {
+        require(msg.value == serviceFee, "Incorrect payment amount sent");
+        require(bytes(_serviceType).length > 0, "Service type cannot be empty");
+        require(bytes(_paymentNonce).length > 0, "Payment nonce cannot be empty");
+
+        // Emit an event to make payment verification easier off-chain
+        emit PaymentReceived(msg.sender, msg.value, _serviceType, _paymentNonce);
+
+        // Note: The contract now holds the received funds.
+        // Add withdrawal logic if needed (e.g., onlyOwner withdraw pattern).
+    }
+
+    /**
+     * @notice Allows the owner to withdraw accumulated service fees.
+     * @dev Only callable by the contract owner.
+     */
+    function withdrawFees() public onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No fees to withdraw.");
+        payable(owner()).transfer(balance);
     }
 } 
