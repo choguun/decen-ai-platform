@@ -31,7 +31,45 @@ VeriFAI is a web platform that empowers users to manage their machine learning w
 *   **Immutable Provenance:** Records key metadata (dataset CID, model CID, metadata CID, owner address, timestamp) as an immutable record on a **Filecoin Virtual Machine (FVM) smart contract**, creating a verifiable audit trail.
 *   **Web3 Authentication:** Uses **Sign-In with Ethereum (SIWE)** for secure, wallet-based user authentication.
 
-![VeriFAI Architecture Diagram](architecture.png) <!-- Optional: Add a simple architecture diagram -->
+```mermaid
+graph LR
+    subgraph "User & Browser"
+        U(User) --- W(Wallet - MetaMask)
+        U --> FE(Frontend - Next.js/Wagmi)
+        W <--> FE
+    end
+
+    subgraph "Backend (FastAPI)"
+        B(Backend API)
+        ML(ML Service - Scikit-learn)
+        FVM_INT(FVM Interaction - Web3.py)
+        LH_INT(Lighthouse Interaction)
+        AUTH(Auth - SIWE Verify)
+    end
+
+    subgraph "Decentralized Infrastructure"
+        LHS(Lighthouse API)
+        FVM_SC(Provenance Ledger Contract)
+        FVM_NET[(Filecoin EVM Network)]
+        FILECOIN[(Filecoin Storage / IPFS)]
+    end
+
+    FE --> B
+    FE --> AUTH
+    B --> AUTH
+
+    B --> LH_INT
+    LH_INT --> LHS
+    LHS --> FILECOIN
+
+    B --> FVM_INT
+    FVM_INT --> FVM_SC
+    FVM_SC --> FVM_NET
+
+    B --> ML
+    ML --> LH_INT
+    ML --> LH_INT
+```
 
 ## Key Features (Implemented)
 
