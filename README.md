@@ -10,7 +10,7 @@
 
 **Quick Links:**
 *   [Live Demo](#live-demo) <!-- Update with actual link -->
-*   [Video Demo](#https://www.loom.com/share/49c902b61b2f44edb44da1fefd3413af?sid=94f2c838-f1f7-4a94-a4a3-6f8fc1fc2e83) <!-- Update with actual link -->
+*   [Video Demo](#video-demo) <!-- Update with actual link -->
 *   [Slide Deck](#presentation) <!-- Update with actual link -->
 
 ---
@@ -129,7 +129,7 @@ This combination "hacks" the traditional AI data layer by introducing cryptograp
 
 ## Video Demo
 
-*   **Link:** [Your YouTube/Loom/Other Video URL]
+*   **Link:** [https://www.loom.com/share/49c902b61b2f44edb44da1fefd3413af?sid=94f2c838-f1f7-4a94-a4a3-6f8fc1fc2e83]
 
 ## Presentation
 
