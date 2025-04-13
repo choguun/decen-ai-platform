@@ -54,6 +54,13 @@ def train_model_on_dataset(
         X = df.drop(target_column, axis=1)
         y = df[target_column]
         
+        # --- Explicitly drop identifier columns not used for training ---
+        identifier_cols = ['CustomerID'] # Add other identifiers if needed
+        cols_to_drop_in_X = [col for col in identifier_cols if col in X.columns]
+        if cols_to_drop_in_X:
+            X = X.drop(columns=cols_to_drop_in_X)
+            logger.info(f"Dropped identifier columns from features: {cols_to_drop_in_X}")
+
         # --- Preprocessing: Handle Categorical Features using One-Hot Encoding --- 
         categorical_cols = X.select_dtypes(include=['object', 'category']).columns
         if not categorical_cols.empty:
@@ -62,6 +69,9 @@ def train_model_on_dataset(
             logger.info(f"Data shape after one-hot encoding: {X.shape}")
         else:
              logger.info("No categorical columns found requiring one-hot encoding.")
+
+        # --- Store original categorical cols used for encoding --- 
+        original_categorical_cols = list(categorical_cols)
 
         # Get feature names *after* potential encoding
         feature_names = list(X.columns)
@@ -132,8 +142,7 @@ def train_model_on_dataset(
             "accuracy": float(accuracy),
             "training_samples": int(len(X_train)),
             "test_samples": int(len(X_test)),
-            # Remove dataset_source_path if not needed downstream
-            # "dataset_source_path": dataset_path 
+            "original_categorical_features": original_categorical_cols # Store the list
         }
 
         # --- Save model and info to the specified output directory --- 
@@ -173,8 +182,8 @@ def predict_with_model(
     Makes a prediction using the loaded model and input data.
 
     Args:
-        model: The loaded scikit-learn model object.
-        model_info: The dictionary containing model metadata (especially feature list).
+        model: The loaded model object.
+        model_info: The dictionary containing model metadata (features, categorical features).
         input_data: A dictionary representing a single input sample, with keys
                     matching the model's expected features.
 
@@ -183,29 +192,72 @@ def predict_with_model(
     """
     logger.info(f"Making prediction with model type: {model_info.get('model_type', 'Unknown')}")
     try:
-        # Ensure all required features are present in input_data
-        required_features = model_info.get("features")
-        if not required_features:
+        # --- Get required info from metadata --- 
+        expected_features_after_encoding = model_info.get("features") # Full feature list AFTER encoding
+        original_categorical_features = model_info.get("original_categorical_features", []) # List of categorical cols BEFORE encoding
+
+        if not expected_features_after_encoding:
             logger.error("Feature list not found in model_info.")
             return None
 
-        if not all(feature in input_data for feature in required_features):
-            missing = [f for f in required_features if f not in input_data]
-            logger.error(f"Missing required features in input data: {missing}")
-            return None
+        # --- Convert input dict to DataFrame --- 
+        # We need a DataFrame to use get_dummies
+        input_df_original = pd.DataFrame([input_data])
+        logger.debug(f"Original input DataFrame: \n{input_df_original}")
 
-        # Create DataFrame in the correct order
-        input_df = pd.DataFrame([input_data])[required_features] # Ensure correct column order
-        logger.debug(f"Input DataFrame for prediction: \n{input_df}")
+        # --- Drop identifier columns before preprocessing ---
+        identifier_cols = ['CustomerID'] # Match the columns dropped during training
+        cols_to_drop_in_input = [col for col in identifier_cols if col in input_df_original.columns]
+        if cols_to_drop_in_input:
+            input_df_original = input_df_original.drop(columns=cols_to_drop_in_input)
+            logger.info(f"Dropped identifier columns from input data: {cols_to_drop_in_input}")
+
+        # --- Apply One-Hot Encoding if needed --- 
+        input_df_processed = input_df_original.copy()
+        if original_categorical_features:
+            logger.info(f"Applying one-hot encoding to input for columns: {original_categorical_features}")
+            try:
+                # Ensure only columns present in input are encoded
+                cols_to_encode = [col for col in original_categorical_features if col in input_df_processed.columns]
+                if cols_to_encode:
+                    input_df_processed = pd.get_dummies(input_df_processed, columns=cols_to_encode, drop_first=True)
+                    logger.debug(f"Input DataFrame after get_dummies: \n{input_df_processed.head()}")
+                    # Log dtypes after get_dummies
+                    logger.debug(f"Input DataFrame dtypes after get_dummies: \n{input_df_processed.dtypes}")
+                else:
+                    logger.info("No categorical columns found in the input data to encode.")
+            except Exception as e:
+                logger.error(f"Error applying get_dummies to input data: {e}", exc_info=True)
+                return None # Encoding failed
+
+        # --- Align Columns with Training Data --- 
+        # Ensure the DataFrame has exactly the columns the model expects,
+        # in the correct order, filling missing ones with 0.
+        try:
+            # Reindex based on the feature list from training
+            input_df_aligned = input_df_processed.reindex(columns=expected_features_after_encoding, fill_value=0)
+            logger.debug(f"Input DataFrame after aligning columns: \n{input_df_aligned}")
+            # Log dtypes after alignment
+            logger.debug(f"Input DataFrame dtypes after alignment: \n{input_df_aligned.dtypes}")
+        except Exception as e:
+             logger.error(f"Error aligning input columns with trained features: {e}", exc_info=True)
+             return None # Column alignment failed
+
+        # --- Validate no unexpected extra columns --- 
+        extra_cols = set(input_df_aligned.columns) - set(expected_features_after_encoding)
+        if extra_cols:
+             logger.warning(f"Input data contained unexpected columns after processing: {extra_cols}. These will be ignored.")
+             # Note: reindex should handle this, but double-checking might be useful.
 
         # Make prediction
-        prediction = model.predict(input_df)
+        prediction = model.predict(input_df_aligned) # Use the fully processed DataFrame
+        logger.debug(f"Raw prediction output: {prediction} (Type: {type(prediction)})")
         prediction_value = int(prediction[0]) # Convert numpy int to standard int
 
         # Get probabilities (if available)
         probabilities = None
         if hasattr(model, "predict_proba"):
-            proba_raw = model.predict_proba(input_df)
+            proba_raw = model.predict_proba(input_df_aligned)
             # Assuming binary classification: [prob_class_0, prob_class_1]
             probabilities = {
                 "class_0": float(proba_raw[0][0]),

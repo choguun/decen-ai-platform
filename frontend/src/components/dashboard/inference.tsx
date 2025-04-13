@@ -47,6 +47,7 @@ export function Inference() {
   const [paymentTxHash, setPaymentTxHash] = useState<`0x${string}` | undefined>(undefined);
   const [isPaying, setIsPaying] = useState(false);
   const [isConfirmingPayment, setIsConfirmingPayment] = useState(false);
+  const [isWaitingForBackend, setIsWaitingForBackend] = useState(false); // State for post-payment wait
 
   // --- Model Details State --- 
   const [modelDetails, setModelDetails] = useState<ModelDetails | null>(null);
@@ -101,7 +102,7 @@ export function Inference() {
       const response = await axios.post(`${backendUrl}/inference/predict`,
         {
           model_cid: modelCid,
-          data: parsedSampleData,
+          input_data: parsedSampleData,
           paymentTxHash: confirmedTxHash, // Include payment info
           paymentNonce: confirmedNonce
         },
@@ -133,9 +134,7 @@ export function Inference() {
       toast.error(`Inference failed: ${detail}`);
     } finally {
       setIsLoading(false);
-      // Reset payment state maybe?
-      // setPaymentTxHash(undefined);
-      // setPaymentNonce("");
+      setIsWaitingForBackend(false); // Turn off waiting state here
     }
   };
 
@@ -143,6 +142,7 @@ export function Inference() {
     setInferenceError(null); // Clear previous input errors
     setInferenceOutput(null); // Clear previous output
     setIsSuccess(null);
+    setIsWaitingForBackend(false); // Reset on new attempt
 
     if (!modelCid) {
       setInferenceError("Please enter a Model CID.");
@@ -195,9 +195,6 @@ export function Inference() {
         setIsPaying(false);
         setIsConfirmingPayment(false);
         setPaymentNonce("");
-    } finally {
-        // Ensure paying state is reset even if switchChain fails or user cancels
-        setIsPaying(false);
     }
   };
 
@@ -250,6 +247,7 @@ export function Inference() {
       setIsConfirmingPayment(false);
       setIsPaying(false);
       // --- Now run inference --- 
+      setIsWaitingForBackend(true); // Start waiting for backend HERE
       runInference(writeContractHash, paymentNonce);
     } else if (txError) {
       toast.error(`Payment transaction failed: ${txError.message}`);
@@ -348,7 +346,10 @@ export function Inference() {
              <div className="mt-4 p-3 border rounded bg-muted/50 min-h-[80px] flex items-center justify-center">
                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                  {isPaying && <span className="ml-2 text-muted-foreground text-sm">Processing payment...</span>}
-                 {isLoading && !isPaying && <span className="ml-2 text-muted-foreground text-sm">Running inference...</span>}
+                 {/* Show backend waiting state */}
+                 {isWaitingForBackend && <span className="ml-2 text-muted-foreground text-sm">Running inference on backend...</span>}
+                 {/* Show API loading state (might be redundant if covered by isWaiting) */}
+                 {isLoading && !isWaitingForBackend && !isPaying && <span className="ml-2 text-muted-foreground text-sm">Loading...</span>}
              </div>
          )}
       </CardContent>

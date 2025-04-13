@@ -230,6 +230,8 @@ export function TrainModel() {
             setJobStatus(null);
             setIsPolling(true);
             toast.info(`Training job ${newJobId} submitted.`);
+            // Explicitly turn off submitting state once polling is set
+            setIsSubmitting(false); 
         } else {
             throw new Error("Failed to start training: Invalid response after payment.");
         }
@@ -249,6 +251,7 @@ export function TrainModel() {
         setSubmitError(detail);
         toast.error(detail);
     } finally {
+        // Ensure submitting state is off, even if there was an error before setting polling
         setIsSubmitting(false);
     }
   };
@@ -731,8 +734,8 @@ export function TrainModel() {
             ) : isPaying ? (
                 isConfirmingPayment ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Confirming Payment...</> : 
                 <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Paying Fee...</>
-            ) : isSubmitting ? (
-               <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Submitting Job...</>
+            ) : isSubmitting ? ( // State between payment confirmation and backend response
+               <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Starting Job...</>
             ) : (
                 // Show specific status during polling/background processing
                 isPolling ? (

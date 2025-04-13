@@ -70,9 +70,6 @@ class InferenceResponse(BaseModel):
     model_cid: str
     # Optional: include input_data in response? Can be large.
     # input_data: Dict[str, Any] 
-    # --- Payment Fields --- 
-    paymentTxHash: str = Field(..., description="Transaction hash of the service fee payment.")
-    paymentNonce: str = Field(..., description="Unique nonce associated with the payment transaction.")
 
 # --- Models for the new Upload endpoint --- 
 class UploadTrainedModelRequest(BaseModel):

@@ -49,11 +49,25 @@ def load_model_and_info(model_cid: str, model_info_cid: str | None) -> tuple[Any
             return None, None
 
         # Download model info (if CID provided)
-        info_cid_to_download = model_info_cid or model_info.get('model_info_cid') # Need a reliable way to get info_cid if not provided
+        info_cid_to_download = model_info_cid
+
+        # --- Attempt to find metadata CID from provenance if not provided ---
+        if not info_cid_to_download:
+            logger.info(f"Model info CID not provided for model {model_cid}. Attempting to lookup via provenance...")
+            try:
+                provenance_record = fvm_service.get_provenance_by_cid(model_cid)
+                if provenance_record and provenance_record.get("metadataCid"):
+                    info_cid_to_download = provenance_record["metadataCid"]
+                    logger.info(f"Found metadata CID ({info_cid_to_download}) in provenance record for model {model_cid}.")
+                else:
+                    logger.warning(f"No metadata CID found in provenance record for model {model_cid}.")
+            except Exception as prov_err:
+                logger.error(f"Error looking up provenance for model {model_cid} to find metadata CID: {prov_err}")
+        # --- End metadata CID lookup --- 
+
         if info_cid_to_download:
              if not lighthouse_service.download_file(info_cid_to_download, info_path):
                 logger.warning(f"Failed to download model info file {info_cid_to_download}. Inference might fail if features not embedded.")
-                # Continue without info, prediction might still work if model is self-contained
              else:
                  with open(info_path, 'r') as f:
                     model_info = json.load(f)
