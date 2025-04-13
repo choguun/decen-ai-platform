@@ -1,6 +1,9 @@
 'use client'
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi';
+import { parseEther, formatEther } from 'viem'; // For handling ETH values
+import { filecoinCalibration } from 'viem/chains'; // Import chain definition
 import axios, { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { Button } from "@/components/ui/button";
@@ -14,10 +17,12 @@ import { getAuthToken } from "@/components/auth/connect-wallet-button";
 import { Loader2, ExternalLink } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import ProvenanceLedgerABI from '@/abi/ProvenanceLedger.json'; 
 
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000';
 const filecoinExplorerTx = 'https://calibration.filscan.io/en/message/';
 const lighthouseGateway = 'https://gateway.lighthouse.storage/ipfs/';
+const contractAddress = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as `0x${string}` | undefined;
 
 // --- Type Definition ---
 interface TrainingStatus {
@@ -59,6 +64,34 @@ export function TrainModel() {
   const [modelName, setModelName] = useState<string>("");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // --- Payment State --- 
+  const [serviceFee, setServiceFee] = useState<bigint | null>(null);
+  const [paymentNonce, setPaymentNonce] = useState<string>("");
+  const [paymentTxHash, setPaymentTxHash] = useState<`0x${string}` | undefined>(undefined);
+  const [isPaying, setIsPaying] = useState(false); 
+  const [isConfirmingPayment, setIsConfirmingPayment] = useState(false);
+
+  const { address, chain } = useAccount();
+
+  // --- Chain Switch Hook --- 
+  const { chains, switchChain, isPending: isSwitchingChain, error: switchChainError } = useSwitchChain();
+
+  // --- Wagmi Hooks --- 
+  const { data: fetchedFee, isLoading: isFeeLoading, error: feeError } = useReadContract({
+    address: contractAddress,
+    abi: ProvenanceLedgerABI.abi, // Assuming ABI JSON has an 'abi' field
+    functionName: 'serviceFee',
+    query: {
+        enabled: !!contractAddress, // Only run if address is defined
+    },
+  });
+
+  const { data: writeContractHash, writeContractAsync, isPending: isWritePending, error: writeError } = useWriteContract();
+
+  const { isLoading: isTxConfirming, isSuccess: isTxSuccess, error: txError } = useWaitForTransactionReceipt({ 
+    hash: writeContractHash, 
+    query: { enabled: !!writeContractHash }
+  });
 
   // Function to fetch job status
   const fetchJobStatus = async (currentJobId: string) => {
@@ -125,6 +158,101 @@ export function TrainModel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, isPolling]);
 
+  // --- Effect to update serviceFee state from hook --- 
+  useEffect(() => {
+    if (fetchedFee !== undefined && fetchedFee !== null) {
+        console.log("Service fee fetched:", fetchedFee);
+      setServiceFee(fetchedFee as bigint); 
+    }
+    if (feeError) {
+        console.error("Error fetching service fee:", feeError);
+        toast.error(`Failed to fetch service fee: ${feeError.message}`);
+    }
+  }, [fetchedFee, feeError]);
+
+  // --- Effect to handle transaction confirmation and trigger job submission --- 
+  useEffect(() => {
+    console.log("Tx Confirmation Effect: isTxSuccess=", isTxSuccess, "writeContractHash=", writeContractHash, "paymentNonce=", paymentNonce);
+    if (isTxSuccess && writeContractHash && paymentNonce) {
+        console.log("Condition met! Calling submitTrainingJob with:", writeContractHash, paymentNonce);
+        toast.success(`Payment transaction confirmed: ${writeContractHash.substring(0,10)}...`);
+        setPaymentTxHash(writeContractHash); // Store the confirmed hash
+        setIsConfirmingPayment(false);
+        setIsPaying(false); // Reset paying state on success
+        // --- Now submit the job to the backend --- 
+        submitTrainingJob(writeContractHash, paymentNonce);
+    } else if (txError) {
+        console.error("Payment transaction error:", txError);
+        toast.error(`Payment transaction failed: ${txError.message}`);
+        setIsConfirmingPayment(false);
+        setIsPaying(false);
+        setSubmitError("Payment transaction failed."); // Show error in the form
+    }
+    // Update confirming state based on hook
+    setIsConfirmingPayment(isTxConfirming);
+  }, [isTxSuccess, txError, writeContractHash, isTxConfirming, paymentNonce]); // Added paymentNonce dependency
+
+  // --- Refactored function to submit job *after* payment --- 
+  const submitTrainingJob = async (confirmedTxHash: `0x${string}`, confirmedNonce: string) => {
+    console.log("submitTrainingJob called with:", confirmedTxHash, confirmedNonce);
+    const token = getAuthToken();
+    if (!token) { /* Should be checked before payment, but double-check */ return; }
+
+    setIsSubmitting(true); // Now indicates submitting job to backend
+    setSubmitError(null);
+
+    let hyperparameters = {};
+    if (hyperparametersJson) {
+        try {
+            hyperparameters = JSON.parse(hyperparametersJson);
+        } catch { /* Already validated before payment */ }
+    }
+
+    try {
+        const payload = {
+            dataset_cid: datasetCid,
+            model_type: modelType,
+            target_column: targetColumn,
+            hyperparameters: hyperparameters, 
+            paymentTxHash: confirmedTxHash, // Include payment info
+            paymentNonce: confirmedNonce
+        };
+        console.debug("Submitting training job with payload:", payload);
+
+        const response = await axios.post(`${backendUrl}/training/start`,
+            payload,
+            { headers: { 'Authorization': `Bearer ${token}` } }
+        );
+
+        if (response.data && response.data.job_id) {
+            const newJobId = response.data.job_id;
+            setJobId(newJobId);
+            setJobStatus(null);
+            setIsPolling(true);
+            toast.info(`Training job ${newJobId} submitted.`);
+        } else {
+            throw new Error("Failed to start training: Invalid response after payment.");
+        }
+    } catch (error: unknown) {
+        console.error("Submit training job error (post-payment):", error);
+        let detail = "Failed to submit training job after payment.";
+        if (isAxiosError(error)) {
+            // Handle specific backend errors like 402 Payment Required again?
+            if (error.response?.status === 402) {
+                detail = "Backend payment verification failed. Please check the transaction and try again.";
+            } else {
+                detail = error.response?.data?.detail || error.message;
+            }
+        } else if (error instanceof Error) {
+            detail = error.message;
+        }
+        setSubmitError(detail);
+        toast.error(detail);
+    } finally {
+        setIsSubmitting(false);
+    }
+  };
+
   // --- Function to handle Dataset Preview --- 
   const handlePreviewDataset = async () => {
       if (!datasetCid) {
@@ -172,7 +300,8 @@ export function TrainModel() {
       }
   };
 
-  const handleStartTraining = async () => {
+  // --- Modified function to initiate payment first --- 
+  const handleInitiateTraining = async () => {
     if (!datasetCid) {
       setSubmitError("Please enter a Dataset CID.");
       toast.error("Please enter a Dataset CID.");
@@ -189,76 +318,93 @@ export function TrainModel() {
       return;
     }
 
-    let hyperparameters = {};
+    // Validate hyperparameters JSON format *before* payment
+    let hyperparameters = {}; 
     if (hyperparametersJson) {
         try {
             hyperparameters = JSON.parse(hyperparametersJson);
-            if (typeof hyperparameters !== 'object' || hyperparameters === null || Array.isArray(hyperparameters)) {
-                throw new Error("Hyperparameters must be a valid JSON object.");
-            }
-        } catch (e: any) {
-            const errorMsg = e instanceof Error ? e.message : "Invalid JSON format for Hyperparameters.";
-            setSubmitError(errorMsg);
-            toast.error(errorMsg);
-            return;
-        }
+        } catch { /* Already validated before payment */ }
     }
 
-    const token = getAuthToken();
-    if (!token) {
-      setSubmitError("Authentication required. Please sign in.");
-      toast.error("Please sign in first.");
-      return;
+    // Check if service fee is loaded and > 0
+    if (serviceFee === null || serviceFee <= BigInt(0)) {
+         const feeMsg = serviceFee === BigInt(0) ? "Service fee is currently zero." : "Service fee not loaded or contract not found.";
+         setSubmitError(feeMsg + " Cannot proceed with payment.");
+         toast.error(feeMsg);
+         return;
     }
 
-    setIsSubmitting(true);
+    setIsSubmitting(true); // Indicate validation phase before payment
     setSubmitError(null);
     setStatusError(null);
     setJobId(null);
     setJobStatus(null);
-    setIsPolling(false);
-    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    setIsPolling(false); // Ensure polling stops
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current); 
+    // Reset previous payment attempts
+    setPaymentTxHash(undefined);
     // Reset upload state as well when starting new training
     setIsUploading(false);
     setUploadError(null);
     setModelName("");
+    
+    // --- Check Network --- 
+    if (chain?.id !== filecoinCalibration.id) {
+        toast.info("Please switch to Filecoin Calibration network.");
+        try {
+            // Use the switchChain function from the hook
+            await switchChain({ chainId: filecoinCalibration.id });
+            // If switch is successful, the rest of the logic will proceed
+            // because the component re-renders and this function might be called again
+            // OR the user clicks again. We reset state here.
+            toast.success("Network switched successfully. Please click 'Pay Fee' again.");
+        } catch (switchError: any) {
+            console.error("Failed to switch chain:", switchError);
+            toast.error(`Failed to switch network: ${switchError.message || 'Unknown error'}`);
+        } finally {
+             // Reset states regardless of switch success/failure to allow retry
+            setIsSubmitting(false);
+            setIsPaying(false);
+        }
+         return; // Stop execution after attempting switch
+    }
+    
+    // --- Initiate Payment --- 
+    setIsPaying(true);
+    setIsSubmitting(false); // No longer submitting to backend yet
+    setSubmitError(null);
+    const nonce = Date.now().toString() + Math.random().toString(36).substring(2, 10);
+    setPaymentNonce(nonce); // Store nonce for verification later
+
+    console.log(`Initiating payment: Fee=${serviceFee}, Nonce=${nonce}`);
+    toast.info(`Please confirm the payment of ${formatEther(serviceFee)} FIL in your wallet.`);
 
     try {
-      const payload = {
-          dataset_cid: datasetCid,
-          model_type: modelType,
-          target_column: targetColumn,
-          hyperparameters: hyperparameters, 
-      };
-      console.debug("Submitting training job with payload:", payload);
-
-      const response = await axios.post(`${backendUrl}/training/start`,
-        payload,
-        {
-          headers: { 'Authorization': `Bearer ${token}` },
-        }
-      );
-      if (response.data && response.data.job_id) {
-        const newJobId = response.data.job_id;
-        setJobId(newJobId);
-        setJobStatus(null);
-        setIsPolling(true);
-        toast.info(`Training job ${newJobId} submitted.`);
-      } else {
-         throw new Error("Failed to start training: Invalid response.");
-      }
+        await writeContractAsync({
+            address: contractAddress!,
+            abi: ProvenanceLedgerABI.abi,
+            functionName: 'payForService',
+            args: ["TRAINING", nonce], // Pass service type and nonce
+            value: serviceFee, // Send the fee
+            chainId: filecoinCalibration.id // Explicitly set the chain ID
+        });
+        // writeContractAsync only submits, success/error handled by useEffect watching useWaitForTransactionReceipt
+        // Update state to show confirmation is pending
+        setIsConfirmingPayment(true);
+        setSubmitError(null);
     } catch (error: unknown) {
-      console.error("Start training error:", error);
-       let detail = "Failed to start training job."
-      if (isAxiosError(error)) {
-        detail = error.response?.data?.detail || error.message
-      } else if (error instanceof Error) {
-        detail = error.message
-      }
-      setSubmitError(detail);
-      toast.error(detail);
+        console.error("Failed to initiate payment transaction:", error);
+        // Use error.message safely
+        const detail = writeError ? writeError.message : (error instanceof Error ? error.message : "Failed to send payment transaction.");
+        setSubmitError(detail);
+        toast.error(`Payment failed: ${detail}`);
+        setIsPaying(false); // Reset paying state
+        setIsConfirmingPayment(false);
+        setPaymentNonce(""); // Clear nonce on failure to send
     } finally {
-      setIsSubmitting(false);
+        // Ensure paying state is reset even if switchChain fails or user cancels
+        setIsPaying(false);
+        setIsSubmitting(false); // Also reset this, as it was set briefly
     }
   };
 
@@ -340,6 +486,9 @@ export function TrainModel() {
           setIsUploading(false);
       }
   };
+
+  // --- Helper to format fee --- 
+  const formattedFee = serviceFee !== null ? formatEther(serviceFee) : "...";
 
   return (
     <Card>
@@ -458,6 +607,11 @@ export function TrainModel() {
              </div>
          )}
 
+         {/* --- Display Service Fee --- */}
+         <div className="text-sm text-muted-foreground">
+             Training Service Fee: {isFeeLoading ? "Loading..." : feeError ? "Error loading fee" : `${formattedFee} FIL`}
+         </div>
+
          {submitError && (
              <p className="text-sm text-red-600">Error: {submitError}</p>
          )}
@@ -561,23 +715,36 @@ export function TrainModel() {
       {/* --- Card Footer --- */} 
       <CardFooter>
         <Button 
-            onClick={handleStartTraining} 
-            // Disable start button if:
-            // - No CID/ModelType/TargetColumn
-            // - Submitting new job
-            // - Polling for status (job running)
-            // - Training is complete but not yet uploaded
-            // - Uploading is in progress
-            disabled={!datasetCid || !modelType || !targetColumn || isSubmitting || isPolling || (jobStatus?.status === 'TRAINING_COMPLETE') || isUploading}
+            onClick={handleInitiateTraining} // Changed onClick handler
+            disabled={
+                !datasetCid || !modelType || !targetColumn || 
+                serviceFee === null || isFeeLoading || 
+                isPaying || isConfirmingPayment || isWritePending || isTxConfirming || isSwitchingChain ||
+                isSubmitting || isPolling || 
+                jobStatus?.status === 'TRAINING_COMPLETE' || 
+                isUploading
+            }
         >
-          {isSubmitting ? (
-              <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Submitting...</>
-          ) : (
-              isPolling ? 'Training Active...' : 
-              jobStatus?.status === 'TRAINING_COMPLETE' ? 'Training Complete' : // Indicate completion if button is visible but disabled
-              isUploading ? 'Uploading Model...' : // Indicate upload in progress
-              'Start Training' // Default text
-          )}
+            {/* Update Button Text based on state */}
+            {isSwitchingChain ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Switching Network...</>
+            ) : isPaying ? (
+                isConfirmingPayment ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Confirming Payment...</> : 
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Paying Fee...</>
+            ) : isSubmitting ? (
+               <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Submitting Job...</>
+            ) : (
+                // Show specific status during polling/background processing
+                isPolling ? (
+                    jobStatus?.status === 'VERIFYING_PAYMENT' ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Verifying Payment...</> :
+                    jobStatus?.status === 'DOWNLOADING' ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Downloading Data...</> :
+                    jobStatus?.status === 'TRAINING' ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Training Model...</> :
+                    'Processing...' // Fallback while polling
+                ) : 
+                jobStatus?.status === 'TRAINING_COMPLETE' ? 'Training Complete' : // Indicate completion if button is visible but disabled
+                isUploading ? 'Uploading Model...' : // Indicate upload in progress
+                'Pay Fee & Start Training' // Updated default text
+            )}
         </Button>
       </CardFooter>
     </Card>
